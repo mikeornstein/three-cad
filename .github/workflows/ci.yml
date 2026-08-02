@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches-ignore:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect app stack
+        id: stack
+        run: |
+          if [ -f package.json ]; then
+            echo "has_package=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_package=false" >> "$GITHUB_OUTPUT"
+            echo "No package.json yet — greenfield docs/process mode. App install/test/build skipped."
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.stack.outputs.has_package == 'true'
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        if: steps.stack.outputs.has_package == 'true'
+        run: npm ci
+
+      - name: Test
+        if: steps.stack.outputs.has_package == 'true'
+        run: |
+          if npm run | grep -qE '^  test$'; then
+            npm test
+          else
+            echo "No npm test script; skipping tests."
+          fi
+
+      - name: Build
+        if: steps.stack.outputs.has_package == 'true'
+        run: |
+          if npm run | grep -qE '^  build$'; then
+            npm run build
+          else
+            echo "No npm run build script; skipping build."
+          fi
+
+      - name: Greenfield OK
+        if: steps.stack.outputs.has_package == 'false'
+        run: echo "CI greenfield check passed."
