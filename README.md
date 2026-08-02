@@ -9,7 +9,7 @@ Work is **ticket-driven**: Issues → feature branches → PRs into `main`. Neve
 - **Humans:** [CONTRIBUTING.md](./CONTRIBUTING.md)
 - **Agents:** [AGENTS.md](./AGENTS.md) (full playbook: git hygiene, CI, verification)
 
-Branch protection on `main` is configured via `./scripts/setup-branch-protection.sh` when the GitHub plan allows (Pro for private repos, or a public repo on Free).
+`main` is branch-protected (PRs required, force-push/delete blocked, CI status `check` required). Re-apply with `./scripts/setup-branch-protection.sh` if settings drift.
 
 ## License
 

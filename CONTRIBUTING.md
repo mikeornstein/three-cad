@@ -47,18 +47,20 @@ gh run view <run-id> --log-failed
 
 ## Protecting `main`
 
-We intend GitHub to **block direct pushes** to `main` and require pull requests (and the CI status check once available).
+GitHub branch protection on `main` is enabled:
 
-- **Public** repositories on GitHub Free can use branch protection / rulesets.
-- **Private** repositories need **GitHub Pro** (or higher) for the same enforcement.
+- No direct pushes (including admins)
+- Pull requests required
+- Status check **`check`** required
+- No force-push / no deleting `main`
+- Linear history (squash-merge friendly)
+- Zero required approving reviews (solo + agent workflow)
 
-When the plan allows, enable protection:
+Re-apply if settings drift:
 
 ```bash
 ./scripts/setup-branch-protection.sh
 ```
-
-Until then, the policy is still mandatory for contributors and agents — it is just not yet server-enforced.
 
 ## Questions
 

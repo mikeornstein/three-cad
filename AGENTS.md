@@ -171,30 +171,23 @@ gh pr list
 
 ## Branch protection (`main`)
 
-**Policy (enforce in GitHub when the plan allows):**
+**Enforced on GitHub** (re-apply if settings drift):
 
-- Direct pushes to `main` blocked
+- Direct pushes to `main` blocked (`enforce_admins: true`)
 - Changes only via pull request
 - Force-push and branch deletion on `main` blocked
-- Required status check: **CI** (workflow job `check`) once CI exists
+- Required status check: **`check`** (CI job name)
 - Approving reviews: **0** required (solo + agent workflow); raise later if desired
-
-**Plan limits:** On **private** repos, branch protection and rulesets need **GitHub Pro** (or higher). On **public** Free repos, rulesets/protection work without Pro.
-
-Setup script (run when Pro is enabled or the repo is public):
+- Linear history required (fits squash-merge)
 
 ```bash
 ./scripts/setup-branch-protection.sh
-```
-
-Or manually:
-
-```bash
+# or:
 gh api --method PUT repos/mikeornstein/three-cad/branches/main/protection \
   --input scripts/branch-protection.json
 ```
 
-Agents must still follow the hard rules even if protection is not yet active.
+If the API returns 403 on a private Free plan, upgrade to Pro or make the repo public, then re-run the script. Agents must still follow the hard rules even if protection is temporarily missing.
 
 ## CI
 
