@@ -11,6 +11,7 @@ import {
   LineSegments,
   Mesh,
   type Material,
+  type MeshStandardMaterial,
   type Object3D,
   PerspectiveCamera,
   Scene,
@@ -27,6 +28,9 @@ import {
 /** World units are millimeters. Right-handed, Z-up. */
 export const MM = 1;
 
+/** User-data key for mesh-mode edge overlays parented under solid meshes. */
+const EDGE_OVERLAY_FLAG = "threeCadEdgeOverlay";
+
 export class Viewport {
   readonly scene = new Scene();
   readonly camera: PerspectiveCamera;
@@ -35,8 +39,8 @@ export class Viewport {
 
   private readonly root = new Group();
   private readonly content = new Group();
-  private readonly edgeOverlay = new Group();
   private solidMeshes: Mesh[] = [];
+  private edgeOverlays: LineSegments[] = [];
   private displayMode: DisplayMode = "solid";
   private animationId = 0;
   private disposed = false;
@@ -45,7 +49,6 @@ export class Viewport {
     this.scene.background = new Color(0x1a1c1e);
     this.scene.add(this.root);
     this.root.add(this.content);
-    this.root.add(this.edgeOverlay);
 
     this.camera = new PerspectiveCamera(50, 1, 0.1 * MM, 100_000 * MM);
     this.camera.up.set(0, 0, 1);
@@ -87,15 +90,17 @@ export class Viewport {
   /** Replace scene content (demo solid, later evaluated geometry). */
   setContent(object: Object3D): void {
     this.clearGroup(this.content);
-    this.clearGroup(this.edgeOverlay);
     this.solidMeshes = [];
+    this.edgeOverlays = [];
 
     this.content.add(object);
     object.traverse((child) => {
-      if (child instanceof Mesh) this.solidMeshes.push(child);
+      if (child instanceof Mesh && !child.userData[EDGE_OVERLAY_FLAG]) {
+        this.solidMeshes.push(child);
+      }
     });
 
-    this.rebuildEdgeOverlay();
+    this.rebuildEdgeOverlays();
     this.applyDisplayMode();
     this.frameObject(object);
   }
@@ -125,7 +130,6 @@ export class Viewport {
     cancelAnimationFrame(this.animationId);
     window.removeEventListener("resize", this.onResize);
     this.clearGroup(this.content);
-    this.clearGroup(this.edgeOverlay);
     this.controls.dispose();
     this.renderer.dispose();
   }
@@ -137,9 +141,10 @@ export class Viewport {
     const showEdges = this.displayMode === "mesh";
 
     this.content.visible = showSolid || showWire;
-    this.edgeOverlay.visible = showEdges;
 
     for (const mesh of this.solidMeshes) {
+      // Keep solid mesh itself visible in solid/mesh/wire modes.
+      mesh.visible = true;
       const materials = Array.isArray(mesh.material)
         ? mesh.material
         : [mesh.material];
@@ -147,14 +152,30 @@ export class Viewport {
         if ("wireframe" in mat) {
           (mat as Material & { wireframe: boolean }).wireframe = showWire;
         }
+        // Push solid faces back slightly so coplanar edge lines win the depth test.
+        if (isOffsetable(mat)) {
+          mat.polygonOffset = showEdges;
+          mat.polygonOffsetFactor = showEdges ? 1 : 0;
+          mat.polygonOffsetUnits = showEdges ? 1 : 0;
+          mat.needsUpdate = true;
+        }
       }
+    }
+
+    for (const lines of this.edgeOverlays) {
+      lines.visible = showEdges;
     }
   }
 
-  private rebuildEdgeOverlay(): void {
-    this.clearGroup(this.edgeOverlay);
+  private rebuildEdgeOverlays(): void {
+    for (const lines of this.edgeOverlays) {
+      lines.removeFromParent();
+      disposeObject(lines);
+    }
+    this.edgeOverlays = [];
 
-    // Feature edges only (ignore coplanar triangulation diagonals).
+    // Feature edges (dihedral > threshold). Coplanar triangulation diagonals stay hidden.
+    // ~20° keeps cube/sphere crease edges without every geodesic facet on a fine sphere.
     const thresholdAngle = 20;
 
     for (const mesh of this.solidMeshes) {
@@ -162,15 +183,21 @@ export class Viewport {
       const lines = new LineSegments(
         edges,
         new LineBasicMaterial({
-          color: 0x0d1117,
+          // High contrast on the blue solid; near-black was invisible after z-fight.
+          color: 0xf2f5f8,
           transparent: true,
-          opacity: 0.9,
+          opacity: 0.95,
+          depthTest: true,
+          depthWrite: false,
         }),
       );
-      lines.position.copy(mesh.position);
-      lines.quaternion.copy(mesh.quaternion);
-      lines.scale.copy(mesh.scale);
-      this.edgeOverlay.add(lines);
+      lines.name = `${mesh.name || "mesh"}-edges`;
+      lines.userData[EDGE_OVERLAY_FLAG] = true;
+      // Draw after the solid so polygon-offset faces don't obscure the lines.
+      lines.renderOrder = 1;
+      // Parent under the mesh so any future transform stays aligned.
+      mesh.add(lines);
+      this.edgeOverlays.push(lines);
     }
   }
 
@@ -230,6 +257,15 @@ function disposeObject(object: Object3D): void {
       for (const m of materials) m.dispose();
     }
   });
+}
+
+function isOffsetable(
+  mat: Material,
+): mat is Material & Pick<
+  MeshStandardMaterial,
+  "polygonOffset" | "polygonOffsetFactor" | "polygonOffsetUnits" | "needsUpdate"
+> {
+  return "polygonOffset" in mat;
 }
 
 export { displayModeLabel };
