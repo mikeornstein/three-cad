@@ -28,6 +28,8 @@ const HIGHLIGHT_SOLID = 0x4fc3f7;
 
 /** Selected-edge tube radius (mm). WebGL ignores LineBasicMaterial linewidth. */
 const EDGE_HIGHLIGHT_RADIUS_MM = 0.7;
+/** Edge highlight opacity — slightly see-through so underlying solid still reads. */
+const EDGE_HIGHLIGHT_OPACITY = 0.65;
 /** Selected-vertex sphere radius (mm). */
 const VERTEX_HIGHLIGHT_RADIUS_MM = 1.4;
 
@@ -162,7 +164,7 @@ export class SelectionHighlight {
   ): void {
     if (points.length < 2) return;
 
-    // One tube per polyline segment so curved topo edges (sphere∩cube) light up whole.
+    // Open tubes + sphere joints/caps → capsule chain (no flat 0-thickness ends).
     for (let i = 0; i < points.length - 1; i++) {
       const a = points[i]!;
       const b = points[i + 1]!;
@@ -177,23 +179,30 @@ export class SelectionHighlight {
           EDGE_HIGHLIGHT_RADIUS_MM,
           EDGE_HIGHLIGHT_RADIUS_MM,
           length,
-          8,
+          10,
           1,
-          false,
+          true, // open-ended; domes handle caps/joints
         ),
-        new MeshBasicMaterial({
-          color: HIGHLIGHT_EDGE,
-          transparent: true,
-          opacity: 0.95,
-          depthTest: true,
-          depthWrite: false,
-        }),
+        edgeHighlightMaterial(),
       );
       mesh.position.copy(_edgeStart).add(_edgeEnd).multiplyScalar(0.5);
       mesh.quaternion.setFromUnitVectors(_yAxis, _edgeDir.normalize());
       mesh.name = `hl-edge:${id}:${i}`;
       mesh.renderOrder = 5;
       this.group.add(mesh);
+    }
+
+    // Dome every polyline sample: rounded ends + smooth joints between segments.
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i]!;
+      const cap = new Mesh(
+        new SphereGeometry(EDGE_HIGHLIGHT_RADIUS_MM, 12, 10),
+        edgeHighlightMaterial(),
+      );
+      cap.position.set(p.x, p.y, p.z);
+      cap.name = `hl-edge-cap:${id}:${i}`;
+      cap.renderOrder = 5;
+      this.group.add(cap);
     }
   }
 
@@ -216,6 +225,16 @@ export class SelectionHighlight {
     mesh.renderOrder = 6;
     this.group.add(mesh);
   }
+}
+
+function edgeHighlightMaterial(): MeshBasicMaterial {
+  return new MeshBasicMaterial({
+    color: HIGHLIGHT_EDGE,
+    transparent: true,
+    opacity: EDGE_HIGHLIGHT_OPACITY,
+    depthTest: true,
+    depthWrite: false,
+  });
 }
 
 function disposeObject(object: Object3D): void {
