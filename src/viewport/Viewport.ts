@@ -87,6 +87,11 @@ export class Viewport {
     return this.displayMode;
   }
 
+  /** Solid meshes currently in the content group (excludes edge overlays). */
+  getSolidMeshes(): readonly Mesh[] {
+    return this.solidMeshes;
+  }
+
   /** Replace scene content (demo solid, later evaluated geometry). */
   setContent(object: Object3D): void {
     this.clearGroup(this.content);
