@@ -164,7 +164,8 @@ export class SelectionHighlight {
   ): void {
     if (points.length < 2) return;
 
-    // Open tubes + sphere joints/caps → capsule chain (no flat 0-thickness ends).
+    // Open tubes along the polyline; hemispheres only at the two free ends.
+    // Full spheres at joints double opacity with the tubes when transparent.
     for (let i = 0; i < points.length - 1; i++) {
       const a = points[i]!;
       const b = points[i + 1]!;
@@ -181,7 +182,7 @@ export class SelectionHighlight {
           length,
           10,
           1,
-          true, // open-ended; domes handle caps/joints
+          true, // open-ended; end hemispheres close the free tips
         ),
         edgeHighlightMaterial(),
       );
@@ -192,18 +193,54 @@ export class SelectionHighlight {
       this.group.add(mesh);
     }
 
-    // Dome every polyline sample: rounded ends + smooth joints between segments.
-    for (let i = 0; i < points.length; i++) {
-      const p = points[i]!;
-      const cap = new Mesh(
-        new SphereGeometry(EDGE_HIGHLIGHT_RADIUS_MM, 12, 10),
-        edgeHighlightMaterial(),
-      );
-      cap.position.set(p.x, p.y, p.z);
-      cap.name = `hl-edge-cap:${id}:${i}`;
-      cap.renderOrder = 5;
-      this.group.add(cap);
-    }
+    const first = points[0]!;
+    const second = points[1]!;
+    const last = points[points.length - 1]!;
+    const prev = points[points.length - 2]!;
+
+    // Outward normals: dome away from the edge so the flat sits on the tube end.
+    this.addEdgeHemisphereCap(
+      id,
+      "start",
+      first,
+      _edgeDir.set(first.x - second.x, first.y - second.y, first.z - second.z),
+    );
+    this.addEdgeHemisphereCap(
+      id,
+      "end",
+      last,
+      _edgeDir.set(last.x - prev.x, last.y - prev.y, last.z - prev.z),
+    );
+  }
+
+  /**
+   * Hemisphere cap at a free edge end. SphereGeometry theta 0..π/2 is the +Y dome
+   * with its flat on the XZ plane through the origin (matches open cylinder end).
+   */
+  private addEdgeHemisphereCap(
+    id: string,
+    which: "start" | "end",
+    position: { x: number; y: number; z: number },
+    outward: Vector3,
+  ): void {
+    if (outward.lengthSq() < 1e-20) return;
+    const cap = new Mesh(
+      new SphereGeometry(
+        EDGE_HIGHLIGHT_RADIUS_MM,
+        12,
+        8,
+        0,
+        Math.PI * 2,
+        0,
+        Math.PI / 2,
+      ),
+      edgeHighlightMaterial(),
+    );
+    cap.position.set(position.x, position.y, position.z);
+    cap.quaternion.setFromUnitVectors(_yAxis, outward.normalize());
+    cap.name = `hl-edge-cap:${id}:${which}`;
+    cap.renderOrder = 5;
+    this.group.add(cap);
   }
 
   private addVertexHighlight(
