@@ -8,8 +8,10 @@
   <body>
     <div id="app">
       <canvas id="viewport"></canvas>
-      <div id="hint" aria-hidden="true">
-        LMB orbit · RMB pan · wheel zoom · units mm · Z-up
+      <div id="toolbar">
+        <button type="button" id="display-mode" data-mode="solid" title="Cycle solid / mesh / wire (M)">
+          Solid
+        </button>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

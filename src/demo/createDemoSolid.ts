@@ -7,6 +7,11 @@
  * - Cube 100×100×100 mm, corner at origin → [0, 100]³
  * - Sphere diameter 100 mm (radius 50 mm), center at +X/+Y/+Z vertex (100,100,100)
  * - Union → single manifold mesh
+ *
+ * Shading note: Manifold returns a *welded* mesh (shared verts at edges).
+ * Smooth `computeVertexNormals()` averages face normals at those verts and
+ * makes flat cube faces look puffy/lumpy. We use flatShading so planar faces
+ * read as true planes (CAD-style).
  */
 
 import Module from "manifold-3d";
@@ -24,6 +29,8 @@ const CUBE_MM = 100;
 const SPHERE_DIAMETER_MM = 100;
 const SPHERE_RADIUS_MM = SPHERE_DIAMETER_MM / 2;
 const CORNER: [number, number, number] = [CUBE_MM, CUBE_MM, CUBE_MM];
+/** Geodesic segments for the sphere (higher = smoother). */
+const SPHERE_SEGMENTS = 64;
 
 export async function createDemoSolid(): Promise<Mesh> {
   const wasm = await Module({
@@ -34,7 +41,9 @@ export async function createDemoSolid(): Promise<Mesh> {
 
   // Manifold cube defaults to first octant touching the origin (center=false).
   const cube = Manifold.cube([CUBE_MM, CUBE_MM, CUBE_MM], false);
-  const sphere = Manifold.sphere(SPHERE_RADIUS_MM, 48).translate(CORNER);
+  const sphere = Manifold.sphere(SPHERE_RADIUS_MM, SPHERE_SEGMENTS).translate(
+    CORNER,
+  );
   const solid = cube.add(sphere);
 
   try {
@@ -42,9 +51,11 @@ export async function createDemoSolid(): Promise<Mesh> {
     const geometry = manifoldMeshToGeometry(mesh);
     const material = new MeshStandardMaterial({
       color: 0x6e9fd4,
-      metalness: 0.15,
-      roughness: 0.45,
+      metalness: 0.12,
+      roughness: 0.5,
       side: DoubleSide,
+      // Critical: welded Manifold meshes look "lumpy" with smooth normals.
+      flatShading: true,
     });
     const threeMesh = new Mesh(geometry, material);
     threeMesh.name = "demo-cube-sphere-union";
@@ -76,6 +87,8 @@ function manifoldMeshToGeometry(mesh: {
   const geometry = new BufferGeometry();
   geometry.setAttribute("position", new BufferAttribute(positions, 3));
   geometry.setIndex(new BufferAttribute(triVerts.slice(), 1));
+  // Still useful for lighting when flatShading is off; with flatShading
+  // Three.js derives per-face normals at draw time.
   geometry.computeVertexNormals();
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();

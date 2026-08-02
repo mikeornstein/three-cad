@@ -4,15 +4,25 @@ import {
   Box3,
   Color,
   DirectionalLight,
+  EdgesGeometry,
   GridHelper,
   Group,
+  LineBasicMaterial,
+  LineSegments,
   Mesh,
+  type Material,
+  type Object3D,
   PerspectiveCamera,
   Scene,
   Vector3,
   WebGLRenderer,
 } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import {
+  type DisplayMode,
+  displayModeLabel,
+  nextDisplayMode,
+} from "./displayMode";
 
 /** World units are millimeters. Right-handed, Z-up. */
 export const MM = 1;
@@ -25,6 +35,9 @@ export class Viewport {
 
   private readonly root = new Group();
   private readonly content = new Group();
+  private readonly edgeOverlay = new Group();
+  private solidMeshes: Mesh[] = [];
+  private displayMode: DisplayMode = "solid";
   private animationId = 0;
   private disposed = false;
 
@@ -32,6 +45,7 @@ export class Viewport {
     this.scene.background = new Color(0x1a1c1e);
     this.scene.add(this.root);
     this.root.add(this.content);
+    this.root.add(this.edgeOverlay);
 
     this.camera = new PerspectiveCamera(50, 1, 0.1 * MM, 100_000 * MM);
     this.camera.up.set(0, 0, 1);
@@ -55,24 +69,38 @@ export class Viewport {
     this.loop();
   }
 
-  /** Replace scene content with a mesh (demo solid, later evaluated geometry). */
-  setContent(mesh: Mesh): void {
-    while (this.content.children.length > 0) {
-      const child = this.content.children[0]!;
-      this.content.remove(child);
-      if (child instanceof Mesh) {
-        child.geometry.dispose();
-        const materials = Array.isArray(child.material)
-          ? child.material
-          : [child.material];
-        for (const m of materials) m.dispose();
-      }
-    }
-    this.content.add(mesh);
-    this.frameObject(mesh);
+  getDisplayMode(): DisplayMode {
+    return this.displayMode;
   }
 
-  frameObject(object: Mesh): void {
+  /** Cycle solid → mesh (edges) → wireframe. Returns the new mode. */
+  cycleDisplayMode(): DisplayMode {
+    return this.setDisplayMode(nextDisplayMode(this.displayMode));
+  }
+
+  setDisplayMode(mode: DisplayMode): DisplayMode {
+    this.displayMode = mode;
+    this.applyDisplayMode();
+    return this.displayMode;
+  }
+
+  /** Replace scene content (demo solid, later evaluated geometry). */
+  setContent(object: Object3D): void {
+    this.clearGroup(this.content);
+    this.clearGroup(this.edgeOverlay);
+    this.solidMeshes = [];
+
+    this.content.add(object);
+    object.traverse((child) => {
+      if (child instanceof Mesh) this.solidMeshes.push(child);
+    });
+
+    this.rebuildEdgeOverlay();
+    this.applyDisplayMode();
+    this.frameObject(object);
+  }
+
+  frameObject(object: Object3D): void {
     const box = new Box3().setFromObject(object);
     const center = box.getCenter(new Vector3());
     const size = box.getSize(new Vector3());
@@ -81,7 +109,8 @@ export class Viewport {
     this.controls.target.copy(center);
 
     // Isometric-ish view for Z-up mechanical inspection.
-    const distance = radius / Math.tan((this.camera.fov * Math.PI) / 360) * 1.35;
+    const distance =
+      (radius / Math.tan((this.camera.fov * Math.PI) / 360)) * 1.35;
     const dir = new Vector3(1, -1.15, 0.85).normalize();
     this.camera.position.copy(center).addScaledVector(dir, distance);
     this.camera.near = Math.max(distance / 500, 0.01);
@@ -95,15 +124,69 @@ export class Viewport {
     this.disposed = true;
     cancelAnimationFrame(this.animationId);
     window.removeEventListener("resize", this.onResize);
+    this.clearGroup(this.content);
+    this.clearGroup(this.edgeOverlay);
     this.controls.dispose();
     this.renderer.dispose();
   }
 
+  private applyDisplayMode(): void {
+    const showSolid =
+      this.displayMode === "solid" || this.displayMode === "mesh";
+    const showWire = this.displayMode === "wireframe";
+    const showEdges = this.displayMode === "mesh";
+
+    this.content.visible = showSolid || showWire;
+    this.edgeOverlay.visible = showEdges;
+
+    for (const mesh of this.solidMeshes) {
+      const materials = Array.isArray(mesh.material)
+        ? mesh.material
+        : [mesh.material];
+      for (const mat of materials) {
+        if ("wireframe" in mat) {
+          (mat as Material & { wireframe: boolean }).wireframe = showWire;
+        }
+      }
+    }
+  }
+
+  private rebuildEdgeOverlay(): void {
+    this.clearGroup(this.edgeOverlay);
+
+    // Feature edges only (ignore coplanar triangulation diagonals).
+    const thresholdAngle = 20;
+
+    for (const mesh of this.solidMeshes) {
+      const edges = new EdgesGeometry(mesh.geometry, thresholdAngle);
+      const lines = new LineSegments(
+        edges,
+        new LineBasicMaterial({
+          color: 0x0d1117,
+          transparent: true,
+          opacity: 0.9,
+        }),
+      );
+      lines.position.copy(mesh.position);
+      lines.quaternion.copy(mesh.quaternion);
+      lines.scale.copy(mesh.scale);
+      this.edgeOverlay.add(lines);
+    }
+  }
+
+  private clearGroup(group: Group): void {
+    while (group.children.length > 0) {
+      const child = group.children[0]!;
+      group.remove(child);
+      disposeObject(child);
+    }
+  }
+
   private addLights(): void {
-    const ambient = new AmbientLight(0xffffff, 0.45);
-    const key = new DirectionalLight(0xffffff, 1.1);
+    const ambient = new AmbientLight(0xffffff, 0.55);
+    const key = new DirectionalLight(0xffffff, 0.95);
     key.position.set(200, -120, 280);
-    const fill = new DirectionalLight(0xb0c4de, 0.35);
+    const fill = new DirectionalLight(0xb0c4de, 0.4);
     fill.position.set(-180, 100, 80);
     this.root.add(ambient, key, fill);
   }
@@ -136,3 +219,17 @@ export class Viewport {
     this.renderer.render(this.scene, this.camera);
   };
 }
+
+function disposeObject(object: Object3D): void {
+  object.traverse((child) => {
+    if (child instanceof Mesh || child instanceof LineSegments) {
+      child.geometry.dispose();
+      const materials = Array.isArray(child.material)
+        ? child.material
+        : [child.material];
+      for (const m of materials) m.dispose();
+    }
+  });
+}
+
+export { displayModeLabel };
