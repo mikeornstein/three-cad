@@ -226,10 +226,13 @@ function firstValidEdgeHit(
     if (!solid) continue;
     // LineSegments: index is the starting vertex index in the position buffer
     // (2 verts per segment) → segment index = index / 2 when non-indexed.
+    // segmentToEdge maps mesh segments → topological (chained) edges.
     const idx = hit.index;
     if (idx === undefined || idx < 0) continue;
-    const edgeIndex = Math.floor(idx / 2);
-    if (edgeIndex >= solid.edges.length) continue;
+    const segmentIndex = Math.floor(idx / 2);
+    if (segmentIndex < 0 || segmentIndex >= solid.segmentToEdge.length) continue;
+    const edgeIndex = solid.segmentToEdge[segmentIndex]!;
+    if (edgeIndex < 0 || edgeIndex >= solid.edges.length) continue;
     return refFromTopology(solid, "edge", edgeIndex);
   }
   return null;

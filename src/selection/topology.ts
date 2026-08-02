@@ -4,8 +4,9 @@
  * Manifold (and most mesh kernels) do not give B-rep faces/edges. We recover
  * CAD-ish entities from the triangle mesh:
  * - **Faces**: connected triangle regions separated by feature edges (dihedral).
- * - **Edges**: feature / boundary edges only.
- * - **Vertices**: endpoints of feature edges (corners and crease junctions).
+ * - **Edges**: feature *chains* (polylines) between junctions — not every mesh
+ *   segment. A sphere∩cube crease is one curved edge, not dozens of facets.
+ * - **Vertices**: junctions only (degree ≠ 2, or sharp corners on a chain).
  * - **Solid**: the whole mesh.
  */
 
@@ -23,8 +24,15 @@ import {
   type SelectionRef,
 } from "./types";
 
-/** Dihedral angle (degrees) above which an edge is a feature boundary. */
+/** Dihedral angle (degrees) above which a mesh edge is a feature crease. */
 export const FEATURE_EDGE_DEGREES = 20;
+
+/**
+ * On a degree-2 feature vertex, if the chain turns by more than this many
+ * degrees from straight, treat it as a corner (selectable vertex / edge split).
+ * Smooth tessellation along a curve stays well below this.
+ */
+export const FEATURE_CORNER_DEGREES = 40;
 
 export interface TopologyVertex {
   localId: string;
@@ -37,6 +45,11 @@ export interface TopologyVertex {
 export interface TopologyEdge {
   localId: string;
   id: string;
+  /** Ordered mesh vertex indices along the chain (start junction → end). */
+  path: number[];
+  /** World-space samples along the chain (same length as path). */
+  points: Vector3[];
+  /** Endpoints (path[0] / path[path.length-1]). */
   v0: number;
   v1: number;
   a: Vector3;
@@ -61,8 +74,16 @@ export interface SolidTopology {
   vertices: TopologyVertex[];
   /** Map triangle index → face array index. */
   triToFace: Int32Array;
-  /** Pick helpers (world-space positions baked at build time; mesh should be static). */
+  /**
+   * Pick helpers: concatenated segment endpoints for all topo edges
+   * (2 verts × 3 floats per mesh segment along every chain).
+   */
   edgePositions: Float32Array;
+  /**
+   * Parallel to edge segment index (edgePositions.length/6 entries):
+   * maps each pick segment → topological edge index.
+   */
+  segmentToEdge: Int32Array;
   vertexPositions: Float32Array;
   /** edge local index → TopologyEdge */
   edgeByIndex: TopologyEdge[];
@@ -331,61 +352,15 @@ function buildSolidTopology(
     });
   }
 
-  // Feature edges + vertices.
-  const edges: TopologyEdge[] = [];
-  const vertexIndexSet = new Set<number>();
-  const p0 = new Vector3();
-  const p1 = new Vector3();
-
-  for (const key of featureKeys) {
-    const rec = edgeMap.get(key)!;
-    getWorldPos(rec.v0, p0);
-    getWorldPos(rec.v1, p1);
-    const localId = `e${edges.length}`;
-    edges.push({
-      localId,
-      id: makeEntityId("edge", solidId, localId),
-      v0: rec.v0,
-      v1: rec.v1,
-      a: p0.clone(),
-      b: p1.clone(),
+  // Feature *chains* (CAD edges) + junction vertices only.
+  const { edges, vertices, edgePositions, segmentToEdge, vertexPositions } =
+    chainFeatureEdges({
+      featureKeys,
+      edgeMap,
+      getWorldPos,
+      solidId,
+      cornerDegrees: FEATURE_CORNER_DEGREES,
     });
-    vertexIndexSet.add(rec.v0);
-    vertexIndexSet.add(rec.v1);
-  }
-
-  const vertices: TopologyVertex[] = [];
-  const sortedVerts = [...vertexIndexSet].sort((x, y) => x - y);
-  for (const vertexIndex of sortedVerts) {
-    const localId = `v${vertices.length}`;
-    const position = new Vector3();
-    getWorldPos(vertexIndex, position);
-    vertices.push({
-      localId,
-      id: makeEntityId("vertex", solidId, localId),
-      vertexIndex,
-      position,
-    });
-  }
-
-  const edgePositions = new Float32Array(edges.length * 6);
-  edges.forEach((e, i) => {
-    const o = i * 6;
-    edgePositions[o] = e.a.x;
-    edgePositions[o + 1] = e.a.y;
-    edgePositions[o + 2] = e.a.z;
-    edgePositions[o + 3] = e.b.x;
-    edgePositions[o + 4] = e.b.y;
-    edgePositions[o + 5] = e.b.z;
-  });
-
-  const vertexPositions = new Float32Array(vertices.length * 3);
-  vertices.forEach((v, i) => {
-    const o = i * 3;
-    vertexPositions[o] = v.position.x;
-    vertexPositions[o + 1] = v.position.y;
-    vertexPositions[o + 2] = v.position.z;
-  });
 
   return {
     solidId,
@@ -396,10 +371,201 @@ function buildSolidTopology(
     vertices,
     triToFace,
     edgePositions,
+    segmentToEdge,
     vertexPositions,
     edgeByIndex: edges,
     vertexByIndex: vertices,
   };
+}
+
+type EdgeRec = { v0: number; v1: number; tris: number[] };
+
+/**
+ * Collapse feature mesh segments into topological edges (polylines between
+ * junctions) and keep only junction vertices for selection.
+ */
+function chainFeatureEdges(args: {
+  featureKeys: Set<string>;
+  edgeMap: Map<string, EdgeRec>;
+  getWorldPos: (vertexIndex: number, target: Vector3) => Vector3;
+  solidId: string;
+  cornerDegrees: number;
+}): {
+  edges: TopologyEdge[];
+  vertices: TopologyVertex[];
+  edgePositions: Float32Array;
+  segmentToEdge: Int32Array;
+  vertexPositions: Float32Array;
+} {
+  const { featureKeys, edgeMap, getWorldPos, solidId, cornerDegrees } = args;
+
+  // Adjacency: mesh vertex → list of (neighbor, undirected edge key).
+  type Adj = { other: number; key: string };
+  const adj = new Map<number, Adj[]>();
+  for (const key of featureKeys) {
+    const rec = edgeMap.get(key)!;
+    const a = rec.v0;
+    const b = rec.v1;
+    if (!adj.has(a)) adj.set(a, []);
+    if (!adj.has(b)) adj.set(b, []);
+    adj.get(a)!.push({ other: b, key });
+    adj.get(b)!.push({ other: a, key });
+  }
+
+  const posCache = new Map<number, Vector3>();
+  const worldPos = (vi: number): Vector3 => {
+    let p = posCache.get(vi);
+    if (!p) {
+      p = new Vector3();
+      getWorldPos(vi, p);
+      posCache.set(vi, p);
+    }
+    return p;
+  };
+
+  const cosCorner = Math.cos((cornerDegrees * Math.PI) / 180);
+  const d0 = new Vector3();
+  const d1 = new Vector3();
+
+  const isJunction = (vi: number): boolean => {
+    const nbrs = adj.get(vi);
+    if (!nbrs || nbrs.length !== 2) return true;
+    // Degree 2: smooth chain iff the two segments are nearly collinear (opposite).
+    // d0/d1 = unit vectors from vi toward each neighbor; straight ⇒ d0·d1 ≈ -1.
+    const p = worldPos(vi);
+    d0.subVectors(worldPos(nbrs[0]!.other), p);
+    d1.subVectors(worldPos(nbrs[1]!.other), p);
+    if (d0.lengthSq() < 1e-20 || d1.lengthSq() < 1e-20) return true;
+    d0.normalize();
+    d1.normalize();
+    // Junction when turn from straight exceeds cornerDegrees.
+    return d0.dot(d1) > -cosCorner;
+  };
+
+  const junctionSet = new Set<number>();
+  for (const vi of adj.keys()) {
+    if (isJunction(vi)) junctionSet.add(vi);
+  }
+
+  const visitedKeys = new Set<string>();
+  const edges: TopologyEdge[] = [];
+  const segmentPairs: { ax: number; ay: number; az: number; bx: number; by: number; bz: number; edgeIndex: number }[] = [];
+
+  const pushEdgeFromPath = (path: number[]): void => {
+    if (path.length < 2) return;
+    const points = path.map((vi) => worldPos(vi).clone());
+    const localId = `e${edges.length}`;
+    const edgeIndex = edges.length;
+    edges.push({
+      localId,
+      id: makeEntityId("edge", solidId, localId),
+      path: path.slice(),
+      points,
+      v0: path[0]!,
+      v1: path[path.length - 1]!,
+      a: points[0]!.clone(),
+      b: points[points.length - 1]!.clone(),
+    });
+    for (let i = 0; i < points.length - 1; i++) {
+      const A = points[i]!;
+      const B = points[i + 1]!;
+      segmentPairs.push({
+        ax: A.x,
+        ay: A.y,
+        az: A.z,
+        bx: B.x,
+        by: B.y,
+        bz: B.z,
+        edgeIndex,
+      });
+    }
+  };
+
+  const walkChain = (start: number, firstOther: number, firstKey: string): void => {
+    if (visitedKeys.has(firstKey)) return;
+    const path = [start];
+    let prev = start;
+    let curr = firstOther;
+    let key = firstKey;
+    visitedKeys.add(key);
+
+    while (true) {
+      path.push(curr);
+      if (junctionSet.has(curr) && path.length > 1) break;
+
+      const nbrs = adj.get(curr) ?? [];
+      let next: Adj | null = null;
+      for (const n of nbrs) {
+        if (n.other === prev) continue;
+        if (visitedKeys.has(n.key)) continue;
+        next = n;
+        break;
+      }
+      // Closed loop or dead-end mid-chain.
+      if (!next) break;
+      prev = curr;
+      curr = next.other;
+      key = next.key;
+      visitedKeys.add(key);
+
+      // Safety: avoid infinite loops on malformed adjacency.
+      if (path.length > adj.size + 2) break;
+    }
+
+    pushEdgeFromPath(path);
+  };
+
+  // Start a chain from every unused feature segment leaving a junction.
+  const junctionList = [...junctionSet].sort((a, b) => a - b);
+  for (const start of junctionList) {
+    for (const n of adj.get(start) ?? []) {
+      if (visitedKeys.has(n.key)) continue;
+      walkChain(start, n.other, n.key);
+    }
+  }
+
+  // Closed loops (or remaining chains) with no junctions.
+  for (const key of featureKeys) {
+    if (visitedKeys.has(key)) continue;
+    const rec = edgeMap.get(key)!;
+    walkChain(rec.v0, rec.v1, key);
+  }
+
+  // Selectable vertices = junctions that actually touch a feature chain.
+  const vertices: TopologyVertex[] = [];
+  for (const vertexIndex of junctionList) {
+    if ((adj.get(vertexIndex)?.length ?? 0) === 0) continue;
+    const localId = `v${vertices.length}`;
+    vertices.push({
+      localId,
+      id: makeEntityId("vertex", solidId, localId),
+      vertexIndex,
+      position: worldPos(vertexIndex).clone(),
+    });
+  }
+
+  const edgePositions = new Float32Array(segmentPairs.length * 6);
+  const segmentToEdge = new Int32Array(segmentPairs.length);
+  segmentPairs.forEach((seg, i) => {
+    const o = i * 6;
+    edgePositions[o] = seg.ax;
+    edgePositions[o + 1] = seg.ay;
+    edgePositions[o + 2] = seg.az;
+    edgePositions[o + 3] = seg.bx;
+    edgePositions[o + 4] = seg.by;
+    edgePositions[o + 5] = seg.bz;
+    segmentToEdge[i] = seg.edgeIndex;
+  });
+
+  const vertexPositions = new Float32Array(vertices.length * 3);
+  vertices.forEach((v, i) => {
+    const o = i * 3;
+    vertexPositions[o] = v.position.x;
+    vertexPositions[o + 1] = v.position.y;
+    vertexPositions[o + 2] = v.position.z;
+  });
+
+  return { edges, vertices, edgePositions, segmentToEdge, vertexPositions };
 }
 
 function emptySolid(
@@ -416,6 +582,7 @@ function emptySolid(
     vertices: [],
     triToFace: new Int32Array(0),
     edgePositions: new Float32Array(0),
+    segmentToEdge: new Int32Array(0),
     vertexPositions: new Float32Array(0),
     edgeByIndex: [],
     vertexByIndex: [],

@@ -69,7 +69,7 @@ export class SelectionHighlight {
         if (face) this.addFaceHighlight(face.id, solid, face);
       } else if (kind === "edge") {
         const edge = solid.edges[localIndex];
-        if (edge) this.addEdgeHighlight(edge.id, edge.a, edge.b);
+        if (edge) this.addEdgeHighlight(edge.id, edge.points);
       } else if (kind === "vertex") {
         const vertex = solid.vertices[localIndex];
         if (vertex) this.addVertexHighlight(vertex.id, vertex.position);
@@ -158,38 +158,43 @@ export class SelectionHighlight {
 
   private addEdgeHighlight(
     id: string,
-    a: { x: number; y: number; z: number },
-    b: { x: number; y: number; z: number },
+    points: readonly { x: number; y: number; z: number }[],
   ): void {
-    _edgeStart.set(a.x, a.y, a.z);
-    _edgeEnd.set(b.x, b.y, b.z);
-    _edgeDir.subVectors(_edgeEnd, _edgeStart);
-    const length = _edgeDir.length();
-    if (length < 1e-9) return;
+    if (points.length < 2) return;
 
-    // Tube mesh so the highlight has real weight (1px lines are too subtle).
-    const mesh = new Mesh(
-      new CylinderGeometry(
-        EDGE_HIGHLIGHT_RADIUS_MM,
-        EDGE_HIGHLIGHT_RADIUS_MM,
-        length,
-        8,
-        1,
-        false,
-      ),
-      new MeshBasicMaterial({
-        color: HIGHLIGHT_EDGE,
-        transparent: true,
-        opacity: 0.95,
-        depthTest: true,
-        depthWrite: false,
-      }),
-    );
-    mesh.position.copy(_edgeStart).add(_edgeEnd).multiplyScalar(0.5);
-    mesh.quaternion.setFromUnitVectors(_yAxis, _edgeDir.normalize());
-    mesh.name = `hl-edge:${id}`;
-    mesh.renderOrder = 5;
-    this.group.add(mesh);
+    // One tube per polyline segment so curved topo edges (sphere∩cube) light up whole.
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i]!;
+      const b = points[i + 1]!;
+      _edgeStart.set(a.x, a.y, a.z);
+      _edgeEnd.set(b.x, b.y, b.z);
+      _edgeDir.subVectors(_edgeEnd, _edgeStart);
+      const length = _edgeDir.length();
+      if (length < 1e-9) continue;
+
+      const mesh = new Mesh(
+        new CylinderGeometry(
+          EDGE_HIGHLIGHT_RADIUS_MM,
+          EDGE_HIGHLIGHT_RADIUS_MM,
+          length,
+          8,
+          1,
+          false,
+        ),
+        new MeshBasicMaterial({
+          color: HIGHLIGHT_EDGE,
+          transparent: true,
+          opacity: 0.95,
+          depthTest: true,
+          depthWrite: false,
+        }),
+      );
+      mesh.position.copy(_edgeStart).add(_edgeEnd).multiplyScalar(0.5);
+      mesh.quaternion.setFromUnitVectors(_yAxis, _edgeDir.normalize());
+      mesh.name = `hl-edge:${id}:${i}`;
+      mesh.renderOrder = 5;
+      this.group.add(mesh);
+    }
   }
 
   private addVertexHighlight(
