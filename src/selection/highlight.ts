@@ -1,13 +1,15 @@
 import {
   BufferAttribute,
   BufferGeometry,
+  CylinderGeometry,
   DoubleSide,
   Group,
+  LineBasicMaterial,
+  LineSegments,
   Mesh,
   MeshBasicMaterial,
   SphereGeometry,
-  LineBasicMaterial,
-  LineSegments,
+  Vector3,
   type Object3D,
 } from "three";
 import {
@@ -23,6 +25,16 @@ const HIGHLIGHT_FACE = 0xffb020;
 const HIGHLIGHT_EDGE = 0xffcc44;
 const HIGHLIGHT_VERTEX = 0xffee88;
 const HIGHLIGHT_SOLID = 0x4fc3f7;
+
+/** Selected-edge tube radius (mm). WebGL ignores LineBasicMaterial linewidth. */
+const EDGE_HIGHLIGHT_RADIUS_MM = 0.7;
+/** Selected-vertex sphere radius (mm). */
+const VERTEX_HIGHLIGHT_RADIUS_MM = 1.4;
+
+const _edgeStart = new Vector3();
+const _edgeEnd = new Vector3();
+const _edgeDir = new Vector3();
+const _yAxis = new Vector3(0, 1, 0);
 
 /**
  * Rebuilds visual overlays for the current selection.
@@ -149,31 +161,43 @@ export class SelectionHighlight {
     a: { x: number; y: number; z: number },
     b: { x: number; y: number; z: number },
   ): void {
-    const positions = new Float32Array([a.x, a.y, a.z, b.x, b.y, b.z]);
-    const geom = new BufferGeometry();
-    geom.setAttribute("position", new BufferAttribute(positions, 3));
-    const lines = new LineSegments(
-      geom,
-      new LineBasicMaterial({
+    _edgeStart.set(a.x, a.y, a.z);
+    _edgeEnd.set(b.x, b.y, b.z);
+    _edgeDir.subVectors(_edgeEnd, _edgeStart);
+    const length = _edgeDir.length();
+    if (length < 1e-9) return;
+
+    // Tube mesh so the highlight has real weight (1px lines are too subtle).
+    const mesh = new Mesh(
+      new CylinderGeometry(
+        EDGE_HIGHLIGHT_RADIUS_MM,
+        EDGE_HIGHLIGHT_RADIUS_MM,
+        length,
+        8,
+        1,
+        false,
+      ),
+      new MeshBasicMaterial({
         color: HIGHLIGHT_EDGE,
         transparent: true,
-        opacity: 1,
+        opacity: 0.95,
         depthTest: true,
         depthWrite: false,
       }),
     );
-    lines.name = `hl-edge:${id}`;
-    lines.renderOrder = 5;
-    this.group.add(lines);
+    mesh.position.copy(_edgeStart).add(_edgeEnd).multiplyScalar(0.5);
+    mesh.quaternion.setFromUnitVectors(_yAxis, _edgeDir.normalize());
+    mesh.name = `hl-edge:${id}`;
+    mesh.renderOrder = 5;
+    this.group.add(mesh);
   }
 
   private addVertexHighlight(
     id: string,
     position: { x: number; y: number; z: number },
   ): void {
-    // ~2.5 mm sphere — readable at demo scale without hiding the solid.
     const mesh = new Mesh(
-      new SphereGeometry(2.5, 16, 12),
+      new SphereGeometry(VERTEX_HIGHLIGHT_RADIUS_MM, 12, 10),
       new MeshBasicMaterial({
         color: HIGHLIGHT_VERTEX,
         transparent: true,
