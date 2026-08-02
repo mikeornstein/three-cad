@@ -1,0 +1,30 @@
+{
+  "name": "three-cad",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Text-first mechanical assembly workbench (Three.js, mesh-first)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mikeornstein/three-cad.git"
+  },
+  "homepage": "https://github.com/mikeornstein/three-cad#readme",
+  "bugs": {
+    "url": "https://github.com/mikeornstein/three-cad/issues"
+  },
+  "dependencies": {
+    "manifold-3d": "^3.5.1",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.185.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.0"
+  }
+}

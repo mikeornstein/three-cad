@@ -118,7 +118,7 @@ Instance
 ```
 
 - Multiple instances may reference one part (shared definition).  
-- Transforms use a documented convention (e.g. right-handed, Z-up or Y-up—pick one in implementation and stick to it).  
+- Transforms use a documented convention: **right-handed, Z-up**, millimeters (picked with the first viewport scaffold; stick to it).  
 - Subassemblies are trees of instances (`parent`), not a separate document type in v0 (nested documents may come later).
 
 ### Isolation

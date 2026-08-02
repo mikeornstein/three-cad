@@ -10,7 +10,7 @@ A **text-first** mechanical assembly workbench: plain language in, mesh assembli
 
 ---
 
-## Phase 0 — Architecture in-repo ✅ (current deliverable)
+## Phase 0 — Architecture in-repo ✅
 
 **Goal:** Capture product direction before application code.
 
@@ -27,15 +27,23 @@ A **text-first** mechanical assembly workbench: plain language in, mesh assembli
 
 ---
 
-## Phase 1 — Vertical slice
+## Phase 1 — Vertical slice (in progress)
 
 **Goal:** Prove the loop end-to-end with minimal generators.
+
+**Scaffold done:**
+
+- [x] Vite + TypeScript + Three.js host  
+- [x] Viewport: orbit / pan / zoom, mm grid, **Z-up**  
+- [x] Demo solid via Manifold (throwaway cube ∪ sphere — not full evaluator)  
+
+**Still to do:**
 
 - Mesh evaluator skeleton (manifold-oriented kernel + worker)  
 - Minimal assembly document load/save  
 - Structured ops for create part / instance / transform  
 - Thin plain-language or text-command mapping into those ops  
-- Three.js (or equivalent) viewport: view, mm scale, basic part pick  
+- Viewport: basic part pick (view already present)  
 - STL import + export (part and assembly)  
 - Core checks: manifold/watertight, interference, crude min thickness  
 
@@ -122,15 +130,16 @@ A **text-first** mechanical assembly workbench: plain language in, mesh assembli
 
 ## Suggested implementation order (after Phase 0)
 
-1. Document schema stub + in-memory store  
-2. Evaluator + kernel wrapper + cache  
-3. Viewport binding  
-4. Structured command → ops → evaluate → view  
-5. Import/export STL  
-6. Validity module  
-7. Selection + first UIRequest  
-8. NL sugar on top of ops  
-9. Broader generators / kinds  
+1. ~~Viewport scaffold (mm, Z-up, demo solid)~~ ✅  
+2. Document schema stub + in-memory store  
+3. Evaluator + kernel wrapper + cache  
+4. Viewport binding to evaluated scene  
+5. Structured command → ops → evaluate → view  
+6. Import/export STL  
+7. Validity module  
+8. Selection + first UIRequest  
+9. NL sugar on top of ops  
+10. Broader generators / kinds  
 
 ---
 
@@ -142,6 +151,7 @@ A **text-first** mechanical assembly workbench: plain language in, mesh assembli
 | Host | Web app with text channel + viewport as reference UI |
 | Kind priority | `generic`/`machined` + `imported` first; sheet/molded/am specified early, built in Phase 3 |
 | Units | mm internal only |
+| Transform convention | **Z-up**, right-handed (decided with first viewport) |
 | Kernel class | Manifold-oriented mesh solids |
 | Export | STL first; glTF for structure; 3MF when needed |
 
@@ -150,7 +160,7 @@ A **text-first** mechanical assembly workbench: plain language in, mesh assembli
 ## Open questions
 
 1. **NL depth in Phase 1:** keyword/command parser only, or early LLM hook?  
-2. **Transform convention:** Z-up vs Y-up for the whole stack—pick before first shared files.  
+2. ~~**Transform convention:** Z-up vs Y-up~~ → **Z-up** (see defaults table).  
 3. **History in file:** always store op log, optional, or external only?  
 4. **Subassemblies:** instance parent tree only, or nested documents?  
 5. **When to invest in sheet flat pattern** vs visual bent form only?  

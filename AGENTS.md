@@ -8,11 +8,19 @@ Playbook for agents working on **three-cad**. Prefer these commands over asking 
 |------|--------|
 | Repo | `mikeornstein/three-cad` |
 | Intent | Text-first mechanical assembly workbench (Three.js, mesh-first) |
-| Status | Phase 0 — architecture / process; app stack not scaffolded yet |
-| Stack | TBD (update this table when Vite/TS/Three scaffold lands) |
+| Status | Phase 1 started — minimal viewport + Manifold demo solid |
+| Stack | Vite + TypeScript + Three.js + manifold-3d (demo boolean only for now) |
+| Units / up | 1 world unit = 1 mm; **Z-up** (right-handed) |
 | Git model | **Issues → branches → PRs** — never commit or push product work to `main` |
 
-When the app is scaffolded, update this table and the Verification / CI sections with real commands.
+### Local app commands
+
+```bash
+npm install
+npm run dev        # Vite dev server
+npm run typecheck  # tsc --noEmit
+npm run build      # tsc + vite build (what CI runs)
+```
 
 ## Hard rules for agents
 
@@ -199,8 +207,8 @@ Workflow: [`.github/workflows/ci.yml`](./.github/workflows/ci.yml)
 | Pushes to non-`main` branches | Run CI |
 | Push to `main` | Not required for app deploy yet (add later if needed) |
 
-**Greenfield:** If `package.json` is missing, CI checks out the repo and reports “app jobs skipped”.  
-**After scaffold:** CI runs `npm ci`, `npm test`, and `npm run build` when those scripts exist. Update this section and the workflow when the stack lands.
+CI runs `npm ci`, then `npm test` if a `test` script exists, then `npm run build` if a `build` script exists.  
+Currently: **install + build** (no unit tests yet).
 
 Debug CI yourself:
 
@@ -218,7 +226,7 @@ Deploy (when added) must run **only from `main` after merge**, never from featur
 |-----------|------------|
 | Always | Review `git status` and the full diff; no accidental files |
 | Docs-only | Proofread; keep `AGENTS.md` / `CONTRIBUTING.md` consistent |
-| App code (after scaffold) | Install → test → lint/typecheck (if present) → build |
+| App code | `npm install` → `npm run typecheck` → `npm run build` (add `npm test` when tests exist) |
 | PR open | `gh pr checks` green, or fix failures on the same branch |
 
 Never use `Closes #N` if acceptance criteria remain unmet.
