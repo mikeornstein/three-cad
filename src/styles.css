@@ -36,16 +36,42 @@ body {
   touch-action: none;
 }
 
-#hint {
+#toolbar {
   position: absolute;
-  left: 12px;
-  bottom: 12px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.55);
-  color: #c8ccd0;
-  font-size: 12px;
-  letter-spacing: 0.02em;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 8px;
   pointer-events: none;
-  user-select: none;
+}
+
+#toolbar button {
+  pointer-events: auto;
+  margin: 0;
+  padding: 6px 12px;
+  min-width: 4.5rem;
+  border: 1px solid #3a4149;
+  border-radius: 6px;
+  background: rgba(26, 28, 30, 0.85);
+  color: #e8eaed;
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+
+#toolbar button:hover {
+  border-color: #6e9fd4;
+  color: #fff;
+}
+
+#toolbar button:focus-visible {
+  outline: 2px solid #6e9fd4;
+  outline-offset: 2px;
+}
+
+#toolbar button[data-mode="mesh"],
+#toolbar button[data-mode="wireframe"] {
+  border-color: #6e9fd4;
+  background: rgba(40, 60, 85, 0.9);
 }
