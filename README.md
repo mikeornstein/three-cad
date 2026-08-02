@@ -8,7 +8,21 @@ The interface is **meant to evolve**: language is interpreted into durable docum
 
 ## Status
 
-**Phase 0 — architecture and roadmap only.** No application runtime yet.
+**Phase 1 started** — minimal viewport scaffold (Vite + TypeScript + Three.js + Manifold demo solid). Architecture docs from Phase 0 still apply.
+
+### Run locally
+
+```bash
+npm install
+npm run dev
+```
+
+Open the printed local URL. Orbit / pan / zoom the demo solid (100 mm cube ∪ 100 mm-diameter sphere). Units are **mm**; world is **Z-up**.
+
+```bash
+npm run build      # typecheck + production bundle
+npm run typecheck  # tsc only
+```
 
 ## Docs
 
