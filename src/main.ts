@@ -1,5 +1,12 @@
 import "./styles.css";
 import { createDemoSolid } from "./demo/createDemoSolid";
+import { SelectionController } from "./selection/SelectionController";
+import {
+  formatSelectionClipboard,
+  selectionFilterLabel,
+  type SelectionRef,
+} from "./selection/types";
+import { OnscreenConsole } from "./ui/OnscreenConsole";
 import { displayModeLabel, Viewport } from "./viewport/Viewport";
 
 async function main(): Promise<void> {
@@ -8,15 +15,48 @@ async function main(): Promise<void> {
     throw new Error("Missing #viewport canvas");
   }
 
+  const consoleRoot = document.querySelector<HTMLElement>("#console");
+  const screenConsole = consoleRoot
+    ? new OnscreenConsole(consoleRoot)
+    : null;
+
   const viewport = new Viewport(canvas);
   const modeButton = document.querySelector<HTMLButtonElement>("#display-mode");
+  const filterButton =
+    document.querySelector<HTMLButtonElement>("#selection-filter");
+
+  const selection = new SelectionController({
+    scene: viewport.scene,
+    camera: viewport.camera,
+    canvas,
+    onInfo: (message) => {
+      screenConsole?.log(message);
+    },
+    onClipboardPayload: (text, refs) => {
+      echoClipboard(screenConsole, text, refs);
+    },
+  });
 
   const syncModeButton = (): void => {
     if (!modeButton) return;
     const mode = viewport.getDisplayMode();
     modeButton.textContent = displayModeLabel(mode);
-    modeButton.setAttribute("aria-label", `Display mode: ${displayModeLabel(mode)}. Click to cycle.`);
+    modeButton.setAttribute(
+      "aria-label",
+      `Display mode: ${displayModeLabel(mode)}. Click to cycle.`,
+    );
     modeButton.dataset.mode = mode;
+  };
+
+  const syncFilterButton = (): void => {
+    if (!filterButton) return;
+    const filter = selection.getFilter();
+    filterButton.textContent = selectionFilterLabel(filter);
+    filterButton.setAttribute(
+      "aria-label",
+      `Selection filter: ${selectionFilterLabel(filter)}. Click to cycle.`,
+    );
+    filterButton.dataset.filter = filter;
   };
 
   modeButton?.addEventListener("click", () => {
@@ -24,23 +64,72 @@ async function main(): Promise<void> {
     syncModeButton();
   });
 
+  filterButton?.addEventListener("click", () => {
+    selection.cycleFilter();
+    syncFilterButton();
+    screenConsole?.log(
+      `selection filter → ${selectionFilterLabel(selection.getFilter())}`,
+    );
+  });
+
   window.addEventListener("keydown", (event) => {
-    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+    if (
+      event.target instanceof HTMLInputElement ||
+      event.target instanceof HTMLTextAreaElement
+    ) {
       return;
     }
     if (event.key === "m" || event.key === "M") {
       viewport.cycleDisplayMode();
       syncModeButton();
     }
+    if (event.key === "f" || event.key === "F") {
+      // Avoid stealing browser find when combined with modifiers.
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      selection.cycleFilter();
+      syncFilterButton();
+      screenConsole?.log(
+        `selection filter → ${selectionFilterLabel(selection.getFilter())}`,
+      );
+    }
+    if (event.key === "Escape") {
+      selection.store.clear();
+    }
   });
 
   syncModeButton();
+  syncFilterButton();
+
+  screenConsole?.log(
+    "select: click · multi: shift+click · filter: F · clear: Esc / empty click",
+  );
+  screenConsole?.log("ids copy to clipboard on every selection change");
 
   try {
     const solid = await createDemoSolid();
     viewport.setContent(solid);
+    selection.setMeshes(viewport.getSolidMeshes());
   } catch (err) {
     console.error("Failed to build demo solid", err);
+    screenConsole?.log(`error: failed to build demo solid — ${String(err)}`);
+  }
+}
+
+function echoClipboard(
+  screenConsole: OnscreenConsole | null,
+  text: string,
+  refs: readonly SelectionRef[],
+): void {
+  if (!screenConsole) return;
+  if (refs.length === 0) {
+    screenConsole.log("clipboard: (empty)");
+    return;
+  }
+  // Prefer the exact payload written to the clipboard.
+  const payload = text || formatSelectionClipboard(refs);
+  screenConsole.log(`clipboard (${refs.length}):`);
+  for (const line of payload.split("\n")) {
+    screenConsole.log(`  ${line}`);
   }
 }
 

@@ -75,3 +75,60 @@ body {
   border-color: #6e9fd4;
   background: rgba(40, 60, 85, 0.9);
 }
+
+#toolbar button[data-filter="solid"],
+#toolbar button[data-filter="face"],
+#toolbar button[data-filter="edge"],
+#toolbar button[data-filter="vertex"] {
+  border-color: #ffb020;
+  background: rgba(70, 50, 20, 0.9);
+}
+
+#console {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  width: min(420px, calc(100vw - 24px));
+  max-height: min(220px, 32vh);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #3a4149;
+  border-radius: 8px;
+  background: rgba(18, 20, 22, 0.92);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.console-header {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-bottom: 1px solid #2e343a;
+  color: #9aa3ad;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.console-log {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 8px 10px 10px;
+  overflow: auto;
+  color: #d5dbe3;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

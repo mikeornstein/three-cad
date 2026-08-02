@@ -9,9 +9,26 @@
     <div id="app">
       <canvas id="viewport"></canvas>
       <div id="toolbar">
-        <button type="button" id="display-mode" data-mode="solid" title="Cycle solid / mesh / wire (M)">
+        <button
+          type="button"
+          id="display-mode"
+          data-mode="solid"
+          title="Cycle solid / mesh / wire (M)"
+        >
           Solid
         </button>
+        <button
+          type="button"
+          id="selection-filter"
+          data-filter="all"
+          title="Cycle selection filter: all / solid / face / edge / vertex (F)"
+        >
+          All
+        </button>
+      </div>
+      <div id="console" aria-label="Selection console" aria-live="polite">
+        <div class="console-header">Console</div>
+        <pre id="console-log" class="console-log"></pre>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
