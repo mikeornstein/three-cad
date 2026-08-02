@@ -27,9 +27,9 @@ const HIGHLIGHT_VERTEX = 0xffee88;
 const HIGHLIGHT_SOLID = 0x4fc3f7;
 
 /** Selected-edge tube radius (mm). WebGL ignores LineBasicMaterial linewidth. */
-const EDGE_HIGHLIGHT_RADIUS_MM = 0.7;
-/** Edge highlight opacity — slightly see-through so underlying solid still reads. */
-const EDGE_HIGHLIGHT_OPACITY = 0.65;
+const EDGE_HIGHLIGHT_RADIUS_MM = 0.5;
+/** Shared pick-highlight opacity — slightly see-through so underlying solid still reads. */
+const SELECTION_HIGHLIGHT_OPACITY = 0.65;
 /** Selected-vertex sphere radius (mm). */
 const VERTEX_HIGHLIGHT_RADIUS_MM = 1.4;
 
@@ -252,7 +252,7 @@ export class SelectionHighlight {
       new MeshBasicMaterial({
         color: HIGHLIGHT_VERTEX,
         transparent: true,
-        opacity: 0.95,
+        opacity: SELECTION_HIGHLIGHT_OPACITY,
         depthTest: true,
         depthWrite: false,
       }),
@@ -268,7 +268,7 @@ function edgeHighlightMaterial(): MeshBasicMaterial {
   return new MeshBasicMaterial({
     color: HIGHLIGHT_EDGE,
     transparent: true,
-    opacity: EDGE_HIGHLIGHT_OPACITY,
+    opacity: SELECTION_HIGHLIGHT_OPACITY,
     depthTest: true,
     depthWrite: false,
   });
