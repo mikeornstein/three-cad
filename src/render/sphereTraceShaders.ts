@@ -16,8 +16,7 @@ void main() {
 
 /**
  * Build fragment shader. `mapSource` must define `float map(vec3 p)`.
- *
- * Display modes (uMode): 0 solid, 1 mesh (edge-ish), 2 wire (silhouette).
+ * Solid shaded field surface only (no mesh/wire display modes).
  */
 export function buildSphereTraceFragment(mapSource: string): string {
   return /* glsl */ `
@@ -37,7 +36,6 @@ uniform vec3 uFillColor;
 uniform int uMaxSteps;
 uniform float uSurfaceEps;
 uniform float uNormalEps;
-uniform int uMode;
 
 varying vec3 vWorldPos;
 
@@ -104,34 +102,12 @@ void main() {
 
   vec3 pos = ro + rd * hitT;
   vec3 n = calcNormal(pos);
-  vec3 v = normalize(uCameraPos - pos);
-
-  // Wire mode: silhouette only
-  if (uMode == 2) {
-    float fres = abs(dot(n, v));
-    if (fres > 0.22) discard;
-    writeDepth(pos);
-    gl_FragColor = vec4(uColor * 1.15, 1.0);
-    return;
-  }
 
   float ndlKey = max(dot(n, normalize(uKeyDir)), 0.0);
   float ndlFill = max(dot(n, normalize(uFillDir)), 0.0);
   vec3 lit = uAmbient * uColor
     + uKeyColor * uColor * ndlKey
     + uFillColor * uColor * ndlFill;
-
-  // Mesh mode: darken where curvature is high (cheap normal-difference edge cue)
-  if (uMode == 1) {
-    float e = uNormalEps * 4.0;
-    vec3 n2 = normalize(vec3(
-      map(pos + vec3(e, 0.0, 0.0)) - map(pos - vec3(e, 0.0, 0.0)),
-      map(pos + vec3(0.0, e, 0.0)) - map(pos - vec3(0.0, e, 0.0)),
-      map(pos + vec3(0.0, 0.0, e)) - map(pos - vec3(0.0, 0.0, e))
-    ));
-    float edge = clamp(1.0 - abs(dot(n, n2)) * 8.0, 0.0, 1.0);
-    lit = mix(lit, lit * 0.15, edge);
-  }
 
   writeDepth(pos);
   gl_FragColor = vec4(lit, 1.0);

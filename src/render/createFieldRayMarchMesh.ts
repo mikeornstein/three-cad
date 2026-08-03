@@ -86,7 +86,6 @@ export function createFieldRayMarchMesh(
       uMaxSteps: { value: options.maxSteps ?? 128 },
       uSurfaceEps: { value: options.surfaceEpsMm ?? 0.05 },
       uNormalEps: { value: 0.08 },
-      uMode: { value: 0 },
     },
     side: DoubleSide,
     // Transparent false; discarded fragments leave grid visible.
@@ -130,14 +129,3 @@ export function updateRayMarchUniforms(
   mat.uniforms.uViewMatrix.value = viewMatrix;
 }
 
-/** Map display mode string to shader uMode. */
-export function setRayMarchDisplayMode(
-  mesh: Mesh,
-  mode: "solid" | "mesh" | "wireframe",
-): void {
-  if (!isRayMarchMesh(mesh)) return;
-  const mat = mesh.material;
-  if (!(mat instanceof ShaderMaterial)) return;
-  const v = mode === "wireframe" ? 2 : mode === "mesh" ? 1 : 0;
-  mat.uniforms.uMode.value = v;
-}

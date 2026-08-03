@@ -13,7 +13,6 @@ export {
   createFieldRayMarchMesh,
   isRayMarchMesh,
   RAY_MARCH_USER,
-  setRayMarchDisplayMode,
   updateRayMarchUniforms,
   type FieldRayMarchMesh,
   type FieldRayMarchOptions,
