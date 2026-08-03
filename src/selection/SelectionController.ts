@@ -1,19 +1,28 @@
-import type { Mesh, Object3D, PerspectiveCamera, Scene } from "three";
+import {
+  Vector3,
+  type Mesh,
+  type Object3D,
+  type PerspectiveCamera,
+  type Scene,
+} from "three";
 import {
   isRayMarchMesh,
   pickFieldAtPointer,
 } from "../render";
 import { buildRayMarchTopologyIndex } from "../render/fieldTopology";
+import { growSurfaceRegion, type SurfaceRegion } from "../sdf";
 import { SelectionHighlight } from "./highlight";
 import { buildPickHelpers, pickAtPointer } from "./pick";
 import { SelectionStore } from "./SelectionStore";
 import {
   buildTopologyIndex,
   refFromTopology,
+  type SolidTopology,
   type TopologyIndex,
 } from "./topology";
 import {
   formatSelectionClipboard,
+  makeEntityId,
   nextSelectionFilter,
   type SelectionFilter,
   type SelectionRef,
@@ -256,17 +265,15 @@ export class SelectionController {
         return refFromTopology(solid, "solid", 0);
       }
 
-      // face or all → map leaf id to face when possible
-      if (fieldHit.leafId) {
-        const faceIndex = solid.faces.findIndex(
-          (f) => f.leafId === fieldHit.leafId,
-        );
-        if (faceIndex >= 0) {
-          const face = solid.faces[faceIndex]!;
-          face.centroid.copy(fieldHit.point);
-          face.normal.copy(fieldHit.normal);
-          return refFromTopology(solid, "face", faceIndex);
-        }
+      // face or all → surface region flood-fill to creases (planar = degenerate).
+      const region = growSurfaceRegion(fieldHit.field, [
+        fieldHit.point.x,
+        fieldHit.point.y,
+        fieldHit.point.z,
+      ]);
+      if (region) {
+        const faceIndex = ensureRegionFace(solid, region, this.topology!);
+        return refFromTopology(solid, "face", faceIndex);
       }
       return refFromTopology(solid, "solid", 0);
     }
@@ -293,4 +300,53 @@ export class SelectionController {
       });
     }
   }
+}
+
+/**
+ * Register (or refresh) a surface-region face on the solid topology for
+ * highlight / measure lookup. Mutates topology maps.
+ */
+function ensureRegionFace(
+  solid: SolidTopology,
+  region: SurfaceRegion,
+  topology: TopologyIndex,
+): number {
+  const localId = region.regionKey;
+  let faceIndex = solid.faces.findIndex((f) => f.localId === localId);
+  const centroid = new Vector3(
+    region.centroid[0],
+    region.centroid[1],
+    region.centroid[2],
+  );
+  const normal = new Vector3(
+    region.meanNormal[0],
+    region.meanNormal[1],
+    region.meanNormal[2],
+  );
+
+  if (faceIndex < 0) {
+    faceIndex = solid.faces.length;
+    const id = makeEntityId("face", solid.solidId, localId);
+    solid.faces.push({
+      localId,
+      id,
+      leafId: region.leafId,
+      triangleIndices: [],
+      centroid,
+      normal,
+      fieldMeasured: true,
+    });
+    topology.byEntityId.set(id, {
+      solid,
+      kind: "face",
+      localIndex: faceIndex,
+    });
+  } else {
+    const face = solid.faces[faceIndex]!;
+    face.centroid.copy(centroid);
+    face.normal.copy(normal);
+    face.leafId = region.leafId;
+    face.fieldMeasured = true;
+  }
+  return faceIndex;
 }

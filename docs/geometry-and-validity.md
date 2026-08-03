@@ -189,11 +189,13 @@ Export and checks accept a scope:
 | Kind | Field-native idea |
 |------|-------------------|
 | Solid | Instance / part field root |
-| Face / region | CSG leaf id, material id, or multi-label face fields |
-| Edge | Sharp crease (∇f discontinuity) or multi-label junction |
+| Face / region | **Surface region**: flood-fill on \(f=0\) to sharp creases (edgeness / pair-dihedral). Planar plateaus are the **degenerate** case (stable normal). Freeform patches grow by connectivity. Blends: high-curvature bands (later) or hard stops at creases. Stable ids e.g. `demo-cube/+x`, `demo-sphere/curved`. |
+| Edge | Sharp crease (featureScore) or boundary of two regions; soft ridges later |
 | Vertex | Multi-edge / multi-face junction samples |
 
-**Current codebase:** mesh topology pick/measure remains as **migration debt** so the scaffold stays usable while the kernel lands. It will be redesigned (selection v2, measure v2)—not treated as long-term authority.
+**Decision (#32):** faces are regions, not mesh tris and not whole CSG leaves. Analytic leaf features are an id boost when planar+axis, not the only classifier. Temp feature SDFs (#34) are post-select handles.
+
+**Current codebase:** ray-march pick uses `growSurfaceRegion`. Mesh topology pick/measure remains for tessellated test paths only.
 
 Authority measurements (target):
 

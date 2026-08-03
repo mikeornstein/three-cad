@@ -125,7 +125,7 @@ function main(): void {
     "eval: document PartDef → definitionHash cache → field; mesh export-only",
   );
   screenConsole?.log(
-    "select: solid/face via field ray · edge/vertex filters need creases (later)",
+    "select: solid/face via field region (fill to creases) · edge/vertex later",
   );
   screenConsole?.log(
     "build tree (left): construction ops · click row to copy summary",
