@@ -28,4 +28,4 @@ export {
   union,
 } from "./ops";
 export { fieldToMesh } from "./mesh/marchingCubes";
-export { fieldGradient, leafAt } from "./leaf";
+export { fieldGradient, fieldNormal, leafAt } from "./leaf";
