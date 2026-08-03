@@ -1,20 +1,24 @@
 /**
- * Topology vertex positions and edge lengths must match constructive defs
- * within 1 micron when field source is available.
+ * Topology geometry within 1 µm of field-grounded truth for the demo solid.
+ * Face areas are field-measured (not mesh triangle sums).
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createDemoSolid } from "../demo/createDemoSolid";
+import { attachFieldFaceMetrics } from "../measure/measureSelection";
 import { MICRON_MM, nearlyEqual, nearlyEqualVec } from "../sdf/exactFeatures";
 import type { Vec3 } from "../sdf/types";
 import { buildTopologyIndex } from "./topology";
 
 const TOL = MICRON_MM;
+/** Area tolerance (mm²) for field grid integration on cut faces. */
+const AREA_TOL = 0.5;
 
 describe("topology exact geometry: demo cube ∪ sphere", () => {
   const mesh = createDemoSolid();
   const topo = buildTopologyIndex([mesh]);
   const solid = topo.solids[0]!;
+  attachFieldFaceMetrics(solid);
 
   it("attaches field and marks edges/verts exact", () => {
     assert.ok(solid.field, "solid should carry fieldSolid");
@@ -82,6 +86,44 @@ describe("topology exact geometry: demo cube ∪ sphere", () => {
       );
       assert.ok(aOk, `edge ${e.id} start not an exact vertex`);
       assert.ok(bOk, `edge ${e.id} end not an exact vertex`);
+    }
+  });
+
+  it("full cube faces have field area 100×100 mm² (not mesh ~9716)", () => {
+    const fullBuckets = ["-x", "-y", "-z"];
+    for (const bucket of fullBuckets) {
+      const face = solid.faces.find(
+        (f) =>
+          f.leafId === "demo-cube" && f.localId.includes(`/${bucket}/`),
+      );
+      assert.ok(face, `missing cube face ${bucket}`);
+      assert.ok(face.exact, `${bucket} should be field-measured`);
+      assert.ok(
+        nearlyEqual(face.area!, 10_000, TOL),
+        `${face.localId} area ${face.area} ≉ 10000 (1 µm linear → ~same for w×h)`,
+      );
+    }
+    // Explicit id the user quoted
+    const negY = solid.faces.find((f) =>
+      f.id.includes("leaf:demo-cube/-y/"),
+    );
+    assert.ok(negY);
+    assert.ok(nearlyEqual(negY.area!, 10_000, TOL));
+  });
+
+  it("sphere-cut cube faces have area 10000 − π·50²/4 within grid tol", () => {
+    const expect = 10_000 - (Math.PI * 50 * 50) / 4;
+    for (const bucket of ["+x", "+y", "+z"]) {
+      const face = solid.faces.find(
+        (f) =>
+          f.leafId === "demo-cube" && f.localId.includes(`/${bucket}/`),
+      );
+      assert.ok(face, `missing cube face ${bucket}`);
+      assert.ok(face.exact);
+      assert.ok(
+        nearlyEqual(face.area!, expect, AREA_TOL),
+        `${face.localId} area ${face.area} ≉ ${expect}`,
+      );
     }
   });
 });
