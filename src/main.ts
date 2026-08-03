@@ -119,12 +119,19 @@ function main(): void {
   screenConsole?.log(
     "kernel: SDF field solid · selection: field leaves + creases (mesh is pick accel)",
   );
+  screenConsole?.log(
+    "eval: document PartDef → definitionHash cache → field + mesh",
+  );
 
   try {
     const solid = createDemoSolid();
     viewport.setContent(solid);
     selection.setMeshes(viewport.getSolidMeshes());
     refreshMeasures(selection.store.getRefs());
+    const hash = solid.userData.definitionHash as string | undefined;
+    if (hash) {
+      screenConsole?.log(`demo part hash: ${hash}`);
+    }
   } catch (err) {
     console.error("Failed to build demo solid", err);
     screenConsole?.log(`error: failed to build demo solid — ${String(err)}`);
