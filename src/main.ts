@@ -11,7 +11,7 @@ import { MeasureBar } from "./ui/MeasureBar";
 import { OnscreenConsole } from "./ui/OnscreenConsole";
 import { displayModeLabel, Viewport } from "./viewport/Viewport";
 
-async function main(): Promise<void> {
+function main(): void {
   const canvas = document.querySelector<HTMLCanvasElement>("#viewport");
   if (!canvas) {
     throw new Error("Missing #viewport canvas");
@@ -116,9 +116,10 @@ async function main(): Promise<void> {
     "select: click · multi: shift+click · filter: F · clear: Esc / empty click",
   );
   screenConsole?.log("ids copy to clipboard; measures update in the bottom bar");
+  screenConsole?.log("kernel: SDF field solid (mesh is display derivative)");
 
   try {
-    const solid = await createDemoSolid();
+    const solid = createDemoSolid();
     viewport.setContent(solid);
     selection.setMeshes(viewport.getSolidMeshes());
     refreshMeasures(selection.store.getRefs());
@@ -145,4 +146,4 @@ function echoClipboard(
   }
 }
 
-void main();
+main();

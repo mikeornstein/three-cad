@@ -1,7 +1,7 @@
 /**
  * Mesh-derived topology for selection.
  *
- * Manifold (and most mesh kernels) do not give B-rep faces/edges. We recover
+ * Mesh derivatives (and field tessellation) do not give B-rep faces/edges. We recover
  * CAD-ish entities from the triangle mesh:
  * - **Faces**: connected triangle regions separated by feature edges (dihedral).
  * - **Edges**: feature *chains* (polylines) between junctions — not every mesh
