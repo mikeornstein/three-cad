@@ -38,3 +38,9 @@ export {
   type ExactFeatureSet,
   type ExactVertex,
 } from "./exactFeatures";
+export {
+  FIELD_LINEAR_TOL_MM,
+  measurePlanarFaceFromField,
+  projectToSurface,
+  type PlanarFaceMeasure,
+} from "./fieldMeasure";

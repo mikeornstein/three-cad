@@ -99,6 +99,13 @@ export interface TopologyFace {
   triangleIndices: number[];
   centroid: Vector3;
   normal: Vector3;
+  /**
+   * Field-measured area (mm²) when available — not mesh triangle sum.
+   * Filled lazily by measure / tests via {@link attachFieldFaceMetrics}.
+   */
+  area?: number;
+  /** True when area/centroid/normal were refined from the field. */
+  exact?: boolean;
 }
 
 export interface SolidTopology {
