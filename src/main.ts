@@ -1,12 +1,15 @@
 import "./styles.css";
+import { demoPartDef } from "./document/demoDocument";
 import { createDemoSolid } from "./demo/createDemoSolid";
 import { measureSelection } from "./measure/measureSelection";
 import { SelectionController } from "./selection/SelectionController";
+import type { TopologyIndex } from "./selection/topology";
 import {
   formatSelectionClipboard,
   selectionFilterLabel,
   type SelectionRef,
 } from "./selection/types";
+import { BuildTreePanel } from "./ui/BuildTreePanel";
 import { MeasureBar } from "./ui/MeasureBar";
 import { OnscreenConsole } from "./ui/OnscreenConsole";
 import { displayModeLabel, Viewport } from "./viewport/Viewport";
@@ -24,6 +27,16 @@ function main(): void {
 
   const measureRoot = document.querySelector<HTMLElement>("#measure-bar");
   const measureBar = measureRoot ? new MeasureBar(measureRoot) : null;
+
+  const buildTreeRoot = document.querySelector<HTMLElement>("#build-tree");
+  const buildTree = buildTreeRoot
+    ? new BuildTreePanel(buildTreeRoot, {
+        onActivate: (_node, summary) => {
+          screenConsole?.log(`build tree: ${summary}`);
+        },
+      })
+    : null;
+  buildTree?.setPart(demoPartDef());
 
   const viewport = new Viewport(canvas);
   const modeButton = document.querySelector<HTMLButtonElement>("#display-mode");
@@ -47,8 +60,19 @@ function main(): void {
     measureBar.update(measureSelection(refs, selection.getTopology()));
   };
 
-  selection.store.subscribe(refreshMeasures);
+  const syncBuildTreeLeaves = (refs: readonly SelectionRef[]): void => {
+    if (!buildTree) return;
+    buildTree.setActiveLeafIds(
+      leafIdsFromSelection(refs, selection.getTopology()),
+    );
+  };
+
+  selection.store.subscribe((refs) => {
+    refreshMeasures(refs);
+    syncBuildTreeLeaves(refs);
+  });
   refreshMeasures(selection.store.getRefs());
+  syncBuildTreeLeaves(selection.store.getRefs());
 
   const syncModeButton = (): void => {
     if (!modeButton) return;
@@ -122,12 +146,16 @@ function main(): void {
   screenConsole?.log(
     "eval: document PartDef → definitionHash cache → field + mesh",
   );
+  screenConsole?.log(
+    "build tree (left): construction ops · click row to copy summary",
+  );
 
   try {
     const solid = createDemoSolid();
     viewport.setContent(solid);
     selection.setMeshes(viewport.getSolidMeshes());
     refreshMeasures(selection.store.getRefs());
+    syncBuildTreeLeaves(selection.store.getRefs());
     const hash = solid.userData.definitionHash as string | undefined;
     if (hash) {
       screenConsole?.log(`demo part hash: ${hash}`);
@@ -136,6 +164,30 @@ function main(): void {
     console.error("Failed to build demo solid", err);
     screenConsole?.log(`error: failed to build demo solid — ${String(err)}`);
   }
+}
+
+/** Collect CSG leaf ids for selected faces (soft-sync build tree highlight). */
+function leafIdsFromSelection(
+  refs: readonly SelectionRef[],
+  topology: TopologyIndex | null | undefined,
+): string[] {
+  if (!topology || refs.length === 0) return [];
+  const leaves = new Set<string>();
+  for (const ref of refs) {
+    if (ref.kind === "face") {
+      const hit = topology.byEntityId.get(ref.id);
+      if (!hit || hit.kind !== "face") continue;
+      const face = hit.solid.faces[hit.localIndex];
+      if (face?.leafId) leaves.add(face.leafId);
+    } else if (ref.kind === "solid") {
+      const solid = topology.solids.find((s) => s.solidEntityId === ref.id);
+      if (!solid) continue;
+      for (const f of solid.faces) {
+        if (f.leafId) leaves.add(f.leafId);
+      }
+    }
+  }
+  return [...leaves];
 }
 
 function echoClipboard(

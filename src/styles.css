@@ -84,11 +84,153 @@ body {
   background: rgba(70, 50, 20, 0.9);
 }
 
+/* Left construction dock — document FieldNode tree (read-only). */
+#build-tree,
+.build-tree {
+  --build-tree-width: 260px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 44px; /* above measure bar */
+  width: var(--build-tree-width);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #3a4149;
+  background: rgba(16, 18, 20, 0.94);
+  box-shadow: 4px 0 20px rgba(0, 0, 0, 0.28);
+  pointer-events: auto;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.build-tree-header {
+  flex: 0 0 auto;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid #2e343a;
+  color: #9aa3ad;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.build-tree-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 6px 0 12px;
+}
+
+.build-tree-empty {
+  padding: 12px;
+  color: #8b949e;
+}
+
+.build-tree-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 3px 8px 3px calc(8px + var(--depth, 0) * 12px);
+  min-width: 0;
+}
+
+.build-tree-row.is-selected {
+  background: rgba(110, 159, 212, 0.16);
+}
+
+.build-tree-row.is-leaf-active:not(.is-selected) {
+  background: rgba(255, 176, 32, 0.12);
+}
+
+.build-tree-row.is-leaf-active.is-selected {
+  background: rgba(110, 159, 212, 0.22);
+  box-shadow: inset 2px 0 0 #ffb020;
+}
+
+.build-tree-twist {
+  flex: 0 0 1.1rem;
+  margin: 1px 0 0;
+  padding: 0;
+  width: 1.1rem;
+  height: 1.1rem;
+  border: none;
+  background: transparent;
+  color: #8b949e;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.1rem;
+  cursor: pointer;
+}
+
+.build-tree-twist.is-leaf {
+  cursor: default;
+  color: #4a525a;
+}
+
+.build-tree-twist:not(:disabled):hover {
+  color: #e8eaed;
+}
+
+.build-tree-main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  margin: 0;
+  padding: 1px 4px 2px;
+  min-width: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.build-tree-main:hover {
+  background: rgba(110, 159, 212, 0.1);
+}
+
+.build-tree-main:focus-visible {
+  outline: 1px solid #6e9fd4;
+  outline-offset: 0;
+}
+
+.build-tree-title {
+  color: #e8eaed;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.build-tree-detail {
+  color: #8b949e;
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
 #console {
   position: absolute;
-  left: 12px;
+  left: calc(var(--build-tree-width, 260px) + 12px);
   bottom: 72px;
-  width: min(420px, calc(100vw - 24px));
+  width: min(420px, calc(100vw - var(--build-tree-width, 260px) - 24px));
   max-height: min(220px, 32vh);
   display: flex;
   flex-direction: column;
@@ -100,6 +242,10 @@ body {
   overflow: hidden;
   font-size: 12px;
   line-height: 1.4;
+}
+
+:root {
+  --build-tree-width: 260px;
 }
 
 .console-header {
