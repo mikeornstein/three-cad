@@ -1,13 +1,18 @@
 import {
   BufferAttribute,
   BufferGeometry,
+  CircleGeometry,
   CylinderGeometry,
   DoubleSide,
+  DynamicDrawUsage,
   Group,
+  InstancedMesh,
   LineBasicMaterial,
   LineSegments,
+  Matrix4,
   Mesh,
   MeshBasicMaterial,
+  Quaternion,
   SphereGeometry,
   Vector3,
   type Object3D,
@@ -32,11 +37,23 @@ const EDGE_HIGHLIGHT_RADIUS_MM = 0.5;
 const SELECTION_HIGHLIGHT_OPACITY = 0.65;
 /** Selected-vertex sphere radius (mm). */
 const VERTEX_HIGHLIGHT_RADIUS_MM = 1.4;
+/** Disc radius for field region paint (mm); ~cell coverage from densify. */
+const REGION_DISC_RADIUS_MM = 0.55;
+/** Lift discs along normal so they sit above the ray-marched surface. */
+const REGION_DISC_LIFT_MM = 0.12;
+/** Flood-fill reveal duration (ms). */
+const REGION_REVEAL_MS = 320;
 
 const _edgeStart = new Vector3();
 const _edgeEnd = new Vector3();
 const _edgeDir = new Vector3();
 const _yAxis = new Vector3(0, 1, 0);
+const _zAxis = new Vector3(0, 0, 1);
+const _pos = new Vector3();
+const _n = new Vector3();
+const _quat = new Quaternion();
+const _scale = new Vector3(1, 1, 1);
+const _mat = new Matrix4();
 
 /**
  * Rebuilds visual overlays for the current selection.
@@ -45,6 +62,7 @@ const _yAxis = new Vector3(0, 1, 0);
 export class SelectionHighlight {
   readonly group = new Group();
   private topology: TopologyIndex | null = null;
+  private revealRaf = 0;
 
   constructor() {
     this.group.name = "selection-highlights";
@@ -85,6 +103,10 @@ export class SelectionHighlight {
   }
 
   private clear(): void {
+    if (this.revealRaf) {
+      cancelAnimationFrame(this.revealRaf);
+      this.revealRaf = 0;
+    }
     while (this.group.children.length > 0) {
       const child = this.group.children[0]!;
       this.group.remove(child);
@@ -93,6 +115,18 @@ export class SelectionHighlight {
   }
 
   private addSolidHighlight(id: string, solid: SolidTopology): void {
+    // Ray-marched solids have no triangle soup — mark with a sphere at centroid.
+    if (solid.triToFace.length === 0 && solid.field) {
+      const c = new Vector3(
+        (solid.field.bounds.min[0] + solid.field.bounds.max[0]) * 0.5,
+        (solid.field.bounds.min[1] + solid.field.bounds.max[1]) * 0.5,
+        (solid.field.bounds.min[2] + solid.field.bounds.max[2]) * 0.5,
+      );
+      this.addVertexHighlight(`solid-mark:${id}`, c);
+      // Soft AABB wire outline
+      this.addBoundsWire(solid);
+      return;
+    }
     const geom = solidHighlightGeometry(solid);
     const mesh = new Mesh(
       geom,
@@ -138,6 +172,21 @@ export class SelectionHighlight {
     solid: SolidTopology,
     face: TopologyFace,
   ): void {
+    // Field surface-region: paint flood-fill samples as discs (visible grow).
+    if (
+      face.regionSamples &&
+      face.regionSamples.length >= 3 &&
+      face.regionNormals &&
+      face.regionNormals.length === face.regionSamples.length
+    ) {
+      this.addRegionFacePaint(id, face);
+      return;
+    }
+    // Field face without samples yet — seed marker only.
+    if (face.triangleIndices.length === 0) {
+      this.addVertexHighlight(`face-mark:${id}`, face.centroid.clone());
+      return;
+    }
     const geom = faceHighlightGeometry(solid, face);
     const mesh = new Mesh(
       geom,
@@ -156,6 +205,154 @@ export class SelectionHighlight {
     mesh.name = `hl-face:${id}`;
     mesh.renderOrder = 3;
     this.group.add(mesh);
+  }
+
+  /**
+   * Paint a field surface region as instanced discs and reveal from the
+   * flood-fill seed (so the grow is visible, not only the final id).
+   */
+  private addRegionFacePaint(id: string, face: TopologyFace): void {
+    const positions = face.regionSamples!;
+    const normals = face.regionNormals!;
+    const count = positions.length / 3;
+    if (count < 1) return;
+
+    const geom = new CircleGeometry(REGION_DISC_RADIUS_MM, 10);
+    const mat = new MeshBasicMaterial({
+      color: HIGHLIGHT_FACE,
+      transparent: true,
+      opacity: 0.55,
+      side: DoubleSide,
+      depthTest: true,
+      depthWrite: false,
+    });
+    const instanced = new InstancedMesh(geom, mat, count);
+    instanced.name = `hl-region:${id}`;
+    instanced.renderOrder = 3;
+    instanced.instanceMatrix.setUsage(DynamicDrawUsage);
+
+    const seed = face.regionSeed ?? face.centroid;
+    const dist = new Float32Array(count);
+    let maxDist = 1e-6;
+    for (let i = 0; i < count; i++) {
+      const x = positions[i * 3]!;
+      const y = positions[i * 3 + 1]!;
+      const z = positions[i * 3 + 2]!;
+      const d = Math.hypot(x - seed.x, y - seed.y, z - seed.z);
+      dist[i] = d;
+      maxDist = Math.max(maxDist, d);
+    }
+
+    // Start collapsed at seed; reveal expands like flood-fill.
+    const zero = new Vector3(0, 0, 0);
+    for (let i = 0; i < count; i++) {
+      _mat.compose(zero, _quat.identity(), _scale.set(0, 0, 0));
+      instanced.setMatrixAt(i, _mat);
+    }
+    instanced.instanceMatrix.needsUpdate = true;
+    this.group.add(instanced);
+
+    // Seed marker so the click point is obvious during the reveal.
+    this.addVertexHighlight(`face-seed:${id}`, seed);
+
+    const t0 = performance.now();
+    const tick = (): void => {
+      const t = (performance.now() - t0) / REGION_REVEAL_MS;
+      const radius = Math.min(1, Math.max(0, t)) * maxDist * 1.05;
+      const done = t >= 1;
+      for (let i = 0; i < count; i++) {
+        const show = done || dist[i]! <= radius;
+        if (!show) {
+          _mat.compose(zero, _quat.identity(), _scale.set(0, 0, 0));
+          instanced.setMatrixAt(i, _mat);
+          continue;
+        }
+        _pos.set(
+          positions[i * 3]!,
+          positions[i * 3 + 1]!,
+          positions[i * 3 + 2]!,
+        );
+        _n.set(normals[i * 3]!, normals[i * 3 + 1]!, normals[i * 3 + 2]!);
+        if (_n.lengthSq() < 1e-12) _n.set(0, 0, 1);
+        else _n.normalize();
+        // Lift slightly so discs aren't z-fighting the sphere-trace surface.
+        _pos.addScaledVector(_n, REGION_DISC_LIFT_MM);
+        _quat.setFromUnitVectors(_zAxis, _n);
+        // Soft pop as the front passes: full size once inside radius.
+        const local = done
+          ? 1
+          : Math.min(1, Math.max(0.15, 1 - (dist[i]! - radius + 2) / 4));
+        _scale.set(local, local, local);
+        _mat.compose(_pos, _quat, _scale);
+        instanced.setMatrixAt(i, _mat);
+      }
+      instanced.instanceMatrix.needsUpdate = true;
+      if (!done) {
+        this.revealRaf = requestAnimationFrame(tick);
+      } else {
+        this.revealRaf = 0;
+      }
+    };
+    this.revealRaf = requestAnimationFrame(tick);
+  }
+
+  /** AABB wireframe for field solids without a display mesh. */
+  private addBoundsWire(solid: SolidTopology): void {
+    const field = solid.field;
+    if (!field) return;
+    const [x0, y0, z0] = field.bounds.min;
+    const [x1, y1, z1] = field.bounds.max;
+    const corners = [
+      [x0, y0, z0],
+      [x1, y0, z0],
+      [x1, y1, z0],
+      [x0, y1, z0],
+      [x0, y0, z1],
+      [x1, y0, z1],
+      [x1, y1, z1],
+      [x0, y1, z1],
+    ] as const;
+    const edges: readonly [number, number][] = [
+      [0, 1],
+      [1, 2],
+      [2, 3],
+      [3, 0],
+      [4, 5],
+      [5, 6],
+      [6, 7],
+      [7, 4],
+      [0, 4],
+      [1, 5],
+      [2, 6],
+      [3, 7],
+    ];
+    const positions = new Float32Array(edges.length * 6);
+    let w = 0;
+    for (const [a, b] of edges) {
+      const ca = corners[a]!;
+      const cb = corners[b]!;
+      positions[w++] = ca[0];
+      positions[w++] = ca[1];
+      positions[w++] = ca[2];
+      positions[w++] = cb[0];
+      positions[w++] = cb[1];
+      positions[w++] = cb[2];
+    }
+    const lineGeom = new BufferGeometry();
+    lineGeom.setAttribute("position", new BufferAttribute(positions, 3));
+    const lines = new LineSegments(
+      lineGeom,
+      new LineBasicMaterial({
+        color: HIGHLIGHT_SOLID,
+        transparent: true,
+        opacity: 0.9,
+        depthTest: true,
+        depthWrite: false,
+      }),
+    );
+    lines.name = `hl-bounds:${solid.solidId}`;
+    lines.renderOrder = 4;
+    this.group.add(lines);
   }
 
   private addEdgeHighlight(
@@ -276,7 +473,11 @@ function edgeHighlightMaterial(): MeshBasicMaterial {
 
 function disposeObject(object: Object3D): void {
   object.traverse((child) => {
-    if (child instanceof Mesh || child instanceof LineSegments) {
+    if (
+      child instanceof Mesh ||
+      child instanceof LineSegments ||
+      child instanceof InstancedMesh
+    ) {
       child.geometry.dispose();
       const materials = Array.isArray(child.material)
         ? child.material

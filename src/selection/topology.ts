@@ -104,6 +104,15 @@ export interface TopologyFace {
   area?: number;
   /** True when area/centroid/normal were refined from the field. */
   fieldMeasured?: boolean;
+  /**
+   * Field surface-region samples (xyz interleaved, mm) for ray-march face highlight.
+   * Filled by flood-fill pick; empty for mesh-topology faces.
+   */
+  regionSamples?: Float32Array;
+  /** Per-sample unit normals (xyz interleaved), same length/3 as regionSamples. */
+  regionNormals?: Float32Array;
+  /** Seed point that started the region grow (mm). */
+  regionSeed?: Vector3;
 }
 
 export interface SolidTopology {

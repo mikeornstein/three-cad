@@ -16,8 +16,8 @@ Runtime solids are **signed distance / implicit fields** evaluated from the asse
 |--------|-----------|
 | SDF / F-rep solids | Robust CSG, offsets, blends; one math for all part kinds |
 | Millimeters | Real dimensions from day one |
-| Derived meshes | Three.js, export handoff, transitional selection |
-| Tessellated or ray-marched display | Inspection viewport |
+| Derived meshes | Export handoff only (STL / 3MF / glTF) |
+| GPU sphere-trace display | Inspection viewport (FieldNode → GLSL) |
 
 **Not in v0:** OpenCascade / B-rep / STEP as the authority. Those remain a later or external manufacturing bridge.
 
@@ -29,8 +29,8 @@ Runtime solids are **signed distance / implicit fields** evaluated from the asse
 Document (intent)
     → Evaluator (generators + field kernel)
         → FieldSolid (authority solid, mm)
-            → Derived mesh / ray march (disposable)
-            → Viewport buffers / export
+            → GPU sphere-trace / field pick (interactive display)
+            → Derived mesh (export only)
 ```
 
 Parametric intent lives in the document. Fields (and mesh caches) are derived and cacheable by definition hash.
@@ -56,7 +56,7 @@ Requirements on the kernel abstraction:
 - Smooth blend / offset (with explicit distance-policy)  
 - Transform  
 - Import triangle soups → approximate field (success/fail + quality flags)  
-- Export triangle data for STL/glTF and for display (`toMesh(quality)`)  
+- Export triangle data for STL/glTF only (`toMesh(quality)` — not for viewport)  
 - Run off the main thread when used in interactive hosts (worker)  
 - Optional leaf / material ids for future field-native selection  
 
@@ -84,7 +84,7 @@ Implications:
 - Thin sheet bodies use offset/shell on fields when distance policy allows  
 - AM / organic parts are natural field / lattice generators  
 - Dimensions in the document are real mm values users can measure in the viewport  
-- Display meshing may use marching cubes short-term; dual contouring / feature-aware meshing for sharper mechanical edges later  
+- Interactive display is GPU sphere-trace (infinite surface fidelity within step ε). Marching cubes / dual contouring only at export.  
 
 Higher surface continuity and exact CAD handoff come later.
 
@@ -134,12 +134,13 @@ Kinds are defined in [document-model.md](./document-model.md). Generators emit *
 ```text
 definitionHash = hash(kind, generator, version, payload, assetHashes)
 field = cache.get(definitionHash) ?? buildAndStore(definitionHash)
-displayMesh = meshCache.get(definitionHash, quality) ?? fieldToMesh(field, quality)
+exportMesh = meshCache.get(definitionHash, quality) ?? fieldToMesh(field, quality)
 ```
 
 - Instances only apply transforms; they do not duplicate part fields.  
 - Assembly-level meshes for export may bake transforms.  
-- Tessellation quality is part of the mesh cache key, not the field identity.  
+- Tessellation quality is part of the **export** mesh cache key, not the field identity.  
+- Viewport display compiles `FieldNode` → GLSL and sphere-traces; it does not populate the mesh cache.  
 
 ---
 
@@ -188,11 +189,13 @@ Export and checks accept a scope:
 | Kind | Field-native idea |
 |------|-------------------|
 | Solid | Instance / part field root |
-| Face / region | CSG leaf id, material id, or multi-label face fields |
-| Edge | Sharp crease (∇f discontinuity) or multi-label junction |
+| Face / region | **Surface region**: flood-fill on \(f=0\) to sharp creases (edgeness / pair-dihedral). Planar plateaus are the **degenerate** case (stable normal). Freeform patches grow by connectivity. Blends: high-curvature bands (later) or hard stops at creases. Stable ids e.g. `demo-cube/+x`, `demo-sphere/curved`. |
+| Edge | Sharp crease (featureScore) or boundary of two regions; soft ridges later |
 | Vertex | Multi-edge / multi-face junction samples |
 
-**Current codebase:** mesh topology pick/measure remains as **migration debt** so the scaffold stays usable while the kernel lands. It will be redesigned (selection v2, measure v2)—not treated as long-term authority.
+**Decision (#32):** faces are regions, not mesh tris and not whole CSG leaves. Analytic leaf features are an id boost when planar+axis, not the only classifier. Temp feature SDFs (#34) are post-select handles.
+
+**Current codebase:** ray-march pick uses `growSurfaceRegion`. Mesh topology pick/measure remains for tessellated test paths only.
 
 Authority measurements (target):
 
@@ -285,7 +288,7 @@ Do not block assembly workflow on exact curvature.
 - Cache fields by definition hash; cache meshes by (hash, quality).  
 - Rebuild only dirty parts when ops land.  
 - Progressive quality (coarse while dragging UI, fine on commit) is allowed.  
-- Ray-marched display mode is optional; tessellation remains valid for picking/perf.  
+- Ray-marched display is the default; tessellation is export-only (and transitional tests).  
 
 ---
 

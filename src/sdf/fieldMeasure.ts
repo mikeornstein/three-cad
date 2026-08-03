@@ -5,14 +5,25 @@
  * evaluating / projecting on the field to a tolerance.
  */
 
+import {
+  cross,
+  edgeness,
+  EDGENESS_MIN,
+  featureScore,
+  FEATURE_MIN,
+  pairDihedral,
+  planeBasis,
+} from "./fieldFeatures";
+import {
+  FIELD_LINEAR_TOL_MM,
+  MICRON_MM,
+  projectPointOnField,
+  projectToSurface,
+} from "./fieldProject";
 import { fieldNormal, leafAt } from "./leaf";
 import type { FieldSolid, Vec3 } from "./types";
 
-/** Default linear tolerance for projection / extent search (1 µm). */
-export const FIELD_LINEAR_TOL_MM = 1e-3;
-
-/** Alias used by tests / measure policy. */
-export const MICRON_MM = FIELD_LINEAR_TOL_MM;
+export { FIELD_LINEAR_TOL_MM, MICRON_MM, projectPointOnField, projectToSurface };
 
 export function nearlyEqual(a: number, b: number, tol = MICRON_MM): boolean {
   return Math.abs(a - b) <= tol;
@@ -23,32 +34,6 @@ export function nearlyEqualVec(a: Vec3, b: Vec3, tol = MICRON_MM): boolean {
 }
 
 export type Vec3Mut = [number, number, number];
-
-export function projectToSurface(
-  field: FieldSolid,
-  x: number,
-  y: number,
-  z: number,
-  opts?: { maxIter?: number; tol?: number },
-): Vec3 | null {
-  const maxIter = opts?.maxIter ?? 32;
-  const tol = opts?.tol ?? FIELD_LINEAR_TOL_MM * 0.1;
-  let px = x;
-  let py = y;
-  let pz = z;
-  for (let i = 0; i < maxIter; i++) {
-    const f = field.evaluate(px, py, pz);
-    if (Math.abs(f) <= tol) return [px, py, pz];
-    const n = fieldNormal(field, px, py, pz);
-    if (!n) return null;
-    // True-SDF step: move by f along outward normal toward the surface.
-    px -= n[0] * f;
-    py -= n[1] * f;
-    pz -= n[2] * f;
-  }
-  const f = field.evaluate(px, py, pz);
-  return Math.abs(f) <= tol * 10 ? [px, py, pz] : null;
-}
 
 export interface PlanarFaceMeasure {
   area: number;
@@ -208,24 +193,6 @@ function snapNearAxis(n: Vec3, thresh: number): Vec3 {
   if (ax === m) return [n[0] >= 0 ? 1 : -1, 0, 0];
   if (ay === m) return [0, n[1] >= 0 ? 1 : -1, 0];
   return [0, 0, n[2] >= 0 ? 1 : -1];
-}
-
-function planeBasis(n: Vec3): [Vec3, Vec3] {
-  const axis: Vec3 =
-    Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
-  const u0 = cross(n, axis);
-  const uLen = Math.hypot(u0[0], u0[1], u0[2]);
-  const u: Vec3 = [u0[0] / uLen, u0[1] / uLen, u0[2] / uLen];
-  const v0 = cross(n, u);
-  return [u, v0];
-}
-
-function cross(a: Vec3, b: Vec3): Vec3 {
-  return [
-    a[1] * b[2] - a[2] * b[1],
-    a[2] * b[0] - a[0] * b[2],
-    a[0] * b[1] - a[1] * b[0],
-  ];
 }
 
 function planePoint(
@@ -891,72 +858,6 @@ function distPointToSegment(p: Vec3, a: Vec3, b: Vec3): number {
 }
 
 /**
- * Product of the two largest |n| components.
- * Peaks on sharp orthant-style edges (cube: 0.5) and corners (~0.33);
- * ~0 on smooth face interiors. Do **not** use ring-vs-center scores for
- * snap — those peak ~0.2 mm *off* the true edge.
- */
-function edgeness(field: FieldSolid, p: Vec3): number {
-  const n = fieldNormal(field, p[0], p[1], p[2]);
-  if (!n) return 0;
-  const a = [Math.abs(n[0]), Math.abs(n[1]), Math.abs(n[2])].sort(
-    (u, v) => v - u,
-  );
-  return a[0]! * a[1]!;
-}
-
-/**
- * Pairwise normal disagreement on a ring around p (projected to surface).
- * High on any sharp crease (cube edge *and* sphere∩cube); ~0 on faces.
- */
-function pairDihedral(
-  field: FieldSolid,
-  p: Vec3,
-  ringMm = 0.35,
-): number {
-  const n0 = fieldNormal(field, p[0], p[1], p[2]);
-  if (!n0) return 0;
-  const [u, v] = planeBasis(n0);
-  const ns: Vec3[] = [];
-  const N = 8;
-  for (let i = 0; i < N; i++) {
-    const ang = (i * 2 * Math.PI) / N;
-    const c = Math.cos(ang);
-    const s = Math.sin(ang);
-    const proj = projectToSurface(
-      field,
-      p[0] + ringMm * (u[0] * c + v[0] * s),
-      p[1] + ringMm * (u[1] * c + v[1] * s),
-      p[2] + ringMm * (u[2] * c + v[2] * s),
-      { tol: 1e-5 },
-    );
-    if (!proj) continue;
-    const n = fieldNormal(field, proj[0], proj[1], proj[2]);
-    if (n) ns.push(n);
-  }
-  let minDot = 1;
-  for (let i = 0; i < ns.length; i++) {
-    for (let j = i + 1; j < ns.length; j++) {
-      const d =
-        ns[i]![0] * ns[j]![0] +
-        ns[i]![1] * ns[j]![1] +
-        ns[i]![2] * ns[j]![2];
-      minDot = Math.min(minDot, d);
-    }
-  }
-  return Math.max(0, 1 - minDot);
-}
-
-/** Combined feature score for coarse search (MC seeds can be ~1–2 mm off). */
-function featureScore(field: FieldSolid, p: Vec3): number {
-  return pairDihedral(field, p) + edgeness(field, p);
-}
-
-/** On-crease threshold (edgeness on a 90° box edge is 0.5; faces are ~0). */
-const EDGENESS_MIN = 0.12;
-const FEATURE_MIN = 0.25;
-
-/**
  * Project near a mesh seed onto the isosurface, then slide in the tangent
  * plane onto a nearby sharp crease (field-only — no op-tree).
  */
@@ -1248,12 +1149,3 @@ function directionFromEndpoints(points: Vec3[]): Vec3 | null {
   ];
 }
 
-/** Project a world point onto the field surface (Three-friendly). */
-export function projectPointOnField(
-  field: FieldSolid,
-  x: number,
-  y: number,
-  z: number,
-): Vec3 | null {
-  return projectToSurface(field, x, y, z);
-}

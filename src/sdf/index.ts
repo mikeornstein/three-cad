@@ -43,3 +43,18 @@ export {
   type EdgeMeasure,
   type PlanarFaceMeasure,
 } from "./fieldMeasure";
+export {
+  axisFaceBin,
+  edgeness,
+  EDGENESS_MIN,
+  featureScore,
+  FEATURE_MIN,
+  pairDihedral,
+  planeBasis,
+} from "./fieldFeatures";
+export {
+  densifyRegionForHighlight,
+  growSurfaceRegion,
+  type GrowSurfaceRegionOpts,
+  type SurfaceRegion,
+} from "./fieldRegion";
