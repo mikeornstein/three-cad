@@ -29,10 +29,15 @@ export interface FieldSolid {
   /** Conservative axis-aligned bounds in mm (may be padded by ops). */
   readonly bounds: Aabb;
   /**
-   * Optional CSG leaf / material id for future field-native selection.
-   * Propagates through transforms; unions keep neither unless set explicitly.
+   * Optional CSG leaf / material id for this node (primitives set this).
+   * Boolean roots may also set a composite id; prefer {@link leafAt} for selection.
    */
   readonly leafId?: string;
+  /**
+   * Which CSG leaf “owns” this point (for region selection on the surface).
+   * Defaults to {@link leafId} when omitted (true for primitives).
+   */
+  leafAt?(x: number, y: number, z: number): string | undefined;
 }
 
 export interface MeshQuality {

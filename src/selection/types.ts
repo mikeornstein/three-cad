@@ -1,9 +1,12 @@
 /**
- * Selection model for viewport picks.
+ * Selection model for viewport picks (field-native identity — #15).
  *
- * Selections are ephemeral UI context (not document state). IDs are stable for a
- * given evaluated mesh and are meant to be referenced by later language/ops
- * ("distance between these two", "move this face 10 mm in +X").
+ * Selections are ephemeral UI context (not document state). Entity IDs are built
+ * from the field solid graph (CSG leaf ids + crease topology on the derived
+ * mesh), not from raw triangle indices. Meant for language/ops:
+ * "distance between these two", "move this face 10 mm in +X".
+ *
+ * Display mesh is only an acceleration for hit-testing / highlights.
  */
 
 import type { Vector3 } from "three";

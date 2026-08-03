@@ -34,6 +34,7 @@ export function boxSolid(
   return {
     leafId,
     bounds: aabb(min, max),
+    leafAt: leafId ? () => leafId : undefined,
     evaluate(x, y, z) {
       const px = Math.abs(x - cx) - hx;
       const py = Math.abs(y - cy) - hy;
@@ -64,6 +65,7 @@ export function sphereSolid(
       [cx - radius, cy - radius, cz - radius],
       [cx + radius, cy + radius, cz + radius],
     ),
+    leafAt: leafId ? () => leafId : undefined,
     evaluate(x, y, z) {
       return length3(x - cx, y - cy, z - cz) - radius;
     },
@@ -96,6 +98,7 @@ export function cylinderSolid(
       [cx - radius, cy - radius, lo],
       [cx + radius, cy + radius, hi],
     ),
+    leafAt: leafId ? () => leafId : undefined,
     evaluate(x, y, z) {
       const d = Math.hypot(x - cx, y - cy) - radius;
       const dy = Math.abs(z - cz) - hz;

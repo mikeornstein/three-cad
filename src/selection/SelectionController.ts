@@ -78,7 +78,8 @@ export class SelectionController {
   }
 
   /**
-   * Rebuild topology + pick helpers from the current solid meshes.
+   * Rebuild field-native topology + pick helpers from solid meshes.
+   * Expects `mesh.userData.fieldSolid` when the authority field is available.
    * Call after Viewport.setContent (or whenever evaluated geometry changes).
    */
   setMeshes(meshes: readonly Mesh[]): void {
@@ -93,12 +94,17 @@ export class SelectionController {
     this.store.clear();
 
     const summary = this.topology.solids
-      .map(
-        (s) =>
-          `${s.solidId}: ${s.faces.length} faces, ${s.edges.length} edges, ${s.vertices.length} verts`,
-      )
+      .map((s) => {
+        const leaves = new Set(
+          s.faces.map((f) => f.leafId).filter((id): id is string => !!id),
+        );
+        const leafPart =
+          leaves.size > 0 ? `, leaves [${[...leaves].join(", ")}]` : ", no field leaves";
+        const fieldPart = s.field ? "field" : "mesh-only";
+        return `${s.solidId} (${fieldPart}): ${s.faces.length} faces, ${s.edges.length} edges, ${s.vertices.length} verts${leafPart}`;
+      })
       .join("; ");
-    this.opts.onInfo?.(`topology ready — ${summary}`);
+    this.opts.onInfo?.(`selection topology — ${summary}`);
   }
 
   getTopology(): TopologyIndex | null {
