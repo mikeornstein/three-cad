@@ -1,11 +1,13 @@
 import "./styles.css";
 import { createDemoSolid } from "./demo/createDemoSolid";
+import { measureSelection } from "./measure/measureSelection";
 import { SelectionController } from "./selection/SelectionController";
 import {
   formatSelectionClipboard,
   selectionFilterLabel,
   type SelectionRef,
 } from "./selection/types";
+import { MeasureBar } from "./ui/MeasureBar";
 import { OnscreenConsole } from "./ui/OnscreenConsole";
 import { displayModeLabel, Viewport } from "./viewport/Viewport";
 
@@ -19,6 +21,9 @@ async function main(): Promise<void> {
   const screenConsole = consoleRoot
     ? new OnscreenConsole(consoleRoot)
     : null;
+
+  const measureRoot = document.querySelector<HTMLElement>("#measure-bar");
+  const measureBar = measureRoot ? new MeasureBar(measureRoot) : null;
 
   const viewport = new Viewport(canvas);
   const modeButton = document.querySelector<HTMLButtonElement>("#display-mode");
@@ -36,6 +41,14 @@ async function main(): Promise<void> {
       echoClipboard(screenConsole, text, refs);
     },
   });
+
+  const refreshMeasures = (refs: readonly SelectionRef[]): void => {
+    if (!measureBar) return;
+    measureBar.update(measureSelection(refs, selection.getTopology()));
+  };
+
+  selection.store.subscribe(refreshMeasures);
+  refreshMeasures(selection.store.getRefs());
 
   const syncModeButton = (): void => {
     if (!modeButton) return;
@@ -84,7 +97,6 @@ async function main(): Promise<void> {
       syncModeButton();
     }
     if (event.key === "f" || event.key === "F") {
-      // Avoid stealing browser find when combined with modifiers.
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       selection.cycleFilter();
       syncFilterButton();
@@ -103,12 +115,13 @@ async function main(): Promise<void> {
   screenConsole?.log(
     "select: click · multi: shift+click · filter: F · clear: Esc / empty click",
   );
-  screenConsole?.log("ids copy to clipboard on every selection change");
+  screenConsole?.log("ids copy to clipboard; measures update in the bottom bar");
 
   try {
     const solid = await createDemoSolid();
     viewport.setContent(solid);
     selection.setMeshes(viewport.getSolidMeshes());
+    refreshMeasures(selection.store.getRefs());
   } catch (err) {
     console.error("Failed to build demo solid", err);
     screenConsole?.log(`error: failed to build demo solid — ${String(err)}`);
@@ -125,7 +138,6 @@ function echoClipboard(
     screenConsole.log("clipboard: (empty)");
     return;
   }
-  // Prefer the exact payload written to the clipboard.
   const payload = text || formatSelectionClipboard(refs);
   screenConsole.log(`clipboard (${refs.length}):`);
   for (const line of payload.split("\n")) {

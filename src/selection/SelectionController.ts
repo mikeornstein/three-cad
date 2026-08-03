@@ -101,6 +101,10 @@ export class SelectionController {
     this.opts.onInfo?.(`topology ready — ${summary}`);
   }
 
+  getTopology(): TopologyIndex | null {
+    return this.topology;
+  }
+
   getTopologySummary(): string {
     if (!this.topology) return "no topology";
     return this.topology.solids
