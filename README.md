@@ -10,6 +10,8 @@ The interface is **meant to evolve**: language is interpreted into durable docum
 
 **Phase 1 in progress** — viewport scaffold + **SDF kernel** demo solid (cube ∪ sphere). Mesh-era selection/measure still present as migration debt ([#14](https://github.com/mikeornstein/three-cad/issues/14)). Architecture docs describe field-first solids.
 
+**Live demo:** [mikeornstein.github.io/three-cad](https://mikeornstein.github.io/three-cad/) — published from `main` via GitHub Pages.
+
 ### Run locally
 
 ```bash
@@ -17,11 +19,12 @@ npm install
 npm run dev
 ```
 
-Open the printed local URL. Orbit / pan / zoom the demo solid (100 mm cube ∪ 100 mm-diameter sphere). Units are **mm**; world is **Z-up**.
+Open the printed local URL (app base is `/three-cad/`, same as production). Orbit / pan / zoom the demo solid (100 mm cube ∪ 100 mm-diameter sphere). Units are **mm**; world is **Z-up**.
 
 ```bash
 npm run build      # typecheck + production bundle
 npm run typecheck  # tsc only
+npm run preview    # serve dist/ locally
 ```
 
 ## Docs

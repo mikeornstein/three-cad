@@ -208,18 +208,17 @@ gh api --method PUT repos/mikeornstein/three-cad/branches/main/protection \
 
 If the API returns 403 on a private Free plan, upgrade to Pro or make the repo public, then re-run the script. Agents must still follow the hard rules even if protection is temporarily missing.
 
-## CI
-
-Workflow: [`.github/workflows/ci.yml`](./.github/workflows/ci.yml)
+## CI and deploy
 
 | Trigger | Behavior |
 |---------|----------|
-| PRs to `main` | Run CI |
-| Pushes to non-`main` branches | Run CI |
-| Push to `main` | Not required for app deploy yet (add later if needed) |
+| PRs to `main` | CI — [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) |
+| Pushes to non-`main` branches | CI |
+| Push to `main` | Deploy GitHub Pages — [`.github/workflows/deploy-pages.yml`](./.github/workflows/deploy-pages.yml) |
 
-CI runs `npm ci`, then `npm test` if a `test` script exists, then `npm run build` if a `build` script exists.  
-Currently: **install + build** (no unit tests yet).
+CI runs `npm ci`, then `npm test` if a `test` script exists, then `npm run build` if a `build` script exists.
+
+**Deploy** builds `dist/` and publishes to GitHub Pages **only from `main`** (never from feature branches). Live site: https://mikeornstein.github.io/three-cad/
 
 Debug CI yourself:
 
@@ -228,8 +227,6 @@ gh run list --limit 5
 gh run view <run-id> --log-failed
 gh pr checks
 ```
-
-Deploy (when added) must run **only from `main` after merge**, never from feature branches.
 
 ## Verification before “done”
 
