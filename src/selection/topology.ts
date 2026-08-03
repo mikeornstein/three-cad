@@ -1,13 +1,13 @@
 /**
- * Mesh-derived topology for selection.
+ * Field-native topology for selection (#15).
  *
- * Mesh derivatives (and field tessellation) do not give B-rep faces/edges. We recover
- * CAD-ish entities from the triangle mesh:
- * - **Faces**: connected triangle regions separated by feature edges (dihedral).
- * - **Edges**: feature *chains* (polylines) between junctions — not every mesh
- *   segment. A sphere∩cube crease is one curved edge, not dozens of facets.
- * - **Vertices**: junctions only (degree ≠ 2, or sharp corners on a chain).
- * - **Solid**: the whole mesh.
+ * Solid authority is the {@link FieldSolid}. The display mesh accelerates
+ * hit-testing; entity identity comes from:
+ * - **Solid**: field root on the mesh instance
+ * - **Faces / regions**: CSG leaf id (`leafAt`) + connected planar/smooth patches
+ *   separated by feature creases
+ * - **Edges**: feature chains — multi-leaf junctions and/or dihedral creases
+ * - **Vertices**: junctions only (degree ≠ 2, or sharp corners on a chain)
  */
 
 import {
@@ -16,6 +16,7 @@ import {
   Mesh,
   Vector3,
 } from "three";
+import { leafAt, type FieldSolid } from "../sdf";
 import {
   makeEntityId,
   makeSolidEntityId,
@@ -24,15 +25,19 @@ import {
   type SelectionRef,
 } from "./types";
 
-/** Dihedral angle (degrees) above which a mesh edge is a feature crease. */
-export const FEATURE_EDGE_DEGREES = 20;
+/**
+ * Dihedral angle (degrees) above which a same-leaf mesh edge is a feature crease.
+ * Tuned for marching-cubes derivatives (stair-step noise on planes); multi-leaf
+ * boundaries are always features regardless of this threshold.
+ */
+export const FEATURE_EDGE_DEGREES = 45;
 
 /**
  * On a degree-2 feature vertex, if the chain turns by more than this many
  * degrees from straight, treat it as a corner (selectable vertex / edge split).
  * Smooth tessellation along a curve stays well below this.
  */
-export const FEATURE_CORNER_DEGREES = 40;
+export const FEATURE_CORNER_DEGREES = 50;
 
 export interface TopologyVertex {
   localId: string;
@@ -59,6 +64,11 @@ export interface TopologyEdge {
 export interface TopologyFace {
   localId: string;
   id: string;
+  /**
+   * CSG leaf / material that owns this region (`leafAt` on the field).
+   * Stable across remeshing when generators keep leaf ids.
+   */
+  leafId?: string;
   /** Triangle indices (each triangle = 3 consecutive index-buffer corners / 3). */
   triangleIndices: number[];
   centroid: Vector3;
@@ -69,11 +79,15 @@ export interface SolidTopology {
   solidId: string;
   solidEntityId: string;
   mesh: Mesh;
+  /** Authority field solid when available (from mesh.userData.fieldSolid). */
+  field?: FieldSolid;
   faces: TopologyFace[];
   edges: TopologyEdge[];
   vertices: TopologyVertex[];
   /** Map triangle index → face array index. */
   triToFace: Int32Array;
+  /** Map triangle index → CSG leaf id (empty string if unknown). */
+  triLeaf: string[];
   /**
    * Pick helpers: concatenated segment endpoints for all topo edges
    * (2 verts × 3 floats per mesh segment along every chain).
@@ -194,6 +208,19 @@ function solidCentroid(solid: SolidTopology): Vector3 {
   return c;
 }
 
+function fieldFromMesh(mesh: Mesh): FieldSolid | undefined {
+  const raw = mesh.userData?.fieldSolid;
+  if (
+    raw &&
+    typeof raw === "object" &&
+    typeof (raw as FieldSolid).evaluate === "function" &&
+    (raw as FieldSolid).bounds
+  ) {
+    return raw as FieldSolid;
+  }
+  return undefined;
+}
+
 function buildSolidTopology(
   mesh: Mesh,
   meshIndex: number,
@@ -201,10 +228,11 @@ function buildSolidTopology(
 ): SolidTopology {
   const solidId = makeSolidId(mesh.name, meshIndex);
   const solidEntityId = makeSolidEntityId(solidId);
+  const field = fieldFromMesh(mesh);
   const geometry = mesh.geometry;
   const pos = geometry.getAttribute("position") as BufferAttribute;
   if (!pos) {
-    return emptySolid(mesh, solidId, solidEntityId);
+    return emptySolid(mesh, solidId, solidEntityId, field);
   }
 
   // Work in local mesh space; demos are untransformed. Apply mesh matrix later if needed.
@@ -223,13 +251,15 @@ function buildSolidTopology(
     return target;
   };
 
-  // --- triangle normals ---
+  // --- triangle normals + field leaf ownership ---
   const triNormals: Vector3[] = [];
+  const triLeaf: string[] = [];
   const a = new Vector3();
   const b = new Vector3();
   const c = new Vector3();
   const ab = new Vector3();
   const ac = new Vector3();
+  const centroid = new Vector3();
 
   for (let t = 0; t < triCount; t++) {
     const i0 = getTriVertex(t, 0);
@@ -244,6 +274,14 @@ function buildSolidTopology(
     if (n.lengthSq() > 1e-20) n.normalize();
     else n.set(0, 0, 1);
     triNormals.push(n);
+
+    centroid.copy(a).add(b).add(c).multiplyScalar(1 / 3);
+    // Nudge slightly outward so we sample just outside noisy zero-set interiors.
+    centroid.addScaledVector(n, 0.05);
+    const leaf = field
+      ? leafAt(field, centroid.x, centroid.y, centroid.z) ?? ""
+      : "";
+    triLeaf.push(leaf);
   }
 
   // --- edges: key → { v0, v1, tris[] } ---
@@ -280,15 +318,22 @@ function buildSolidTopology(
       featureKeys.add(key);
       continue;
     }
-    const n0 = triNormals[rec.tris[0]!]!;
-    const n1 = triNormals[rec.tris[1]!]!;
-    // Feature when normals diverge beyond threshold (dihedral crease).
+    const t0 = rec.tris[0]!;
+    const t1 = rec.tris[1]!;
+    // Multi-leaf boundary is always a feature (field-native crease).
+    if (triLeaf[t0] !== triLeaf[t1]) {
+      featureKeys.add(key);
+      continue;
+    }
+    const n0 = triNormals[t0]!;
+    const n1 = triNormals[t1]!;
+    // Dihedral crease approximates ∇f discontinuity on the derived mesh.
     if (n0.dot(n1) < cosThreshold) {
       featureKeys.add(key);
     }
   }
 
-  // Triangle adjacency across non-feature edges.
+  // Triangle adjacency across non-feature edges (same leaf implied).
   const neighbors: number[][] = Array.from({ length: triCount }, () => []);
   for (const [key, rec] of edgeMap) {
     if (featureKeys.has(key)) continue;
@@ -298,18 +343,21 @@ function buildSolidTopology(
     neighbors[t1!]!.push(t0!);
   }
 
-  // Face regions via flood fill.
+  // Face regions via flood fill (connected, same leaf, no feature boundary).
   const triToFace = new Int32Array(triCount).fill(-1);
   const faces: TopologyFace[] = [];
   const tmp = new Vector3();
+  /** Per-leaf face counter for stable-ish local ids. */
+  const leafFaceCount = new Map<string, number>();
 
   for (let seed = 0; seed < triCount; seed++) {
     if (triToFace[seed] !== -1) continue;
     const faceIndex = faces.length;
+    const seedLeaf = triLeaf[seed] ?? "";
     const stack = [seed];
     triToFace[seed] = faceIndex;
     const tris: number[] = [];
-    const centroid = new Vector3();
+    const faceCentroid = new Vector3();
     const normal = new Vector3();
     let areaWeight = 0;
 
@@ -326,28 +374,35 @@ function buildSolidTopology(
       ac.subVectors(c, a);
       const cross = tmp.crossVectors(ab, ac);
       const area = cross.length() * 0.5;
-      centroid.add(a).add(b).add(c);
+      faceCentroid.add(a).add(b).add(c);
       normal.addScaledVector(triNormals[t]!, Math.max(area, 1e-12));
       areaWeight += 3; // three corners averaged
 
       for (const n of neighbors[t]!) {
-        if (triToFace[n] === -1) {
-          triToFace[n] = faceIndex;
-          stack.push(n);
-        }
+        if (triToFace[n] !== -1) continue;
+        // Defense: never merge across leaves even if feature detection missed.
+        if ((triLeaf[n] ?? "") !== seedLeaf) continue;
+        triToFace[n] = faceIndex;
+        stack.push(n);
       }
     }
 
-    if (areaWeight > 0) centroid.multiplyScalar(1 / areaWeight);
+    if (areaWeight > 0) faceCentroid.multiplyScalar(1 / areaWeight);
     if (normal.lengthSq() > 1e-20) normal.normalize();
     else normal.set(0, 0, 1);
 
-    const localId = `f${faceIndex}`;
+    const leafKey = seedLeaf || "_";
+    const nInLeaf = leafFaceCount.get(leafKey) ?? 0;
+    leafFaceCount.set(leafKey, nInLeaf + 1);
+    const localId = seedLeaf
+      ? `leaf:${seedLeaf}/f${nInLeaf}`
+      : `f${faceIndex}`;
     faces.push({
       localId,
       id: makeEntityId("face", solidId, localId),
+      leafId: seedLeaf || undefined,
       triangleIndices: tris,
-      centroid,
+      centroid: faceCentroid,
       normal,
     });
   }
@@ -366,10 +421,12 @@ function buildSolidTopology(
     solidId,
     solidEntityId,
     mesh,
+    field,
     faces,
     edges,
     vertices,
     triToFace,
+    triLeaf,
     edgePositions,
     segmentToEdge,
     vertexPositions,
@@ -572,15 +629,18 @@ function emptySolid(
   mesh: Mesh,
   solidId: string,
   solidEntityId: string,
+  field?: FieldSolid,
 ): SolidTopology {
   return {
     solidId,
     solidEntityId,
     mesh,
+    field,
     faces: [],
     edges: [],
     vertices: [],
     triToFace: new Int32Array(0),
+    triLeaf: [],
     edgePositions: new Float32Array(0),
     segmentToEdge: new Int32Array(0),
     vertexPositions: new Float32Array(0),

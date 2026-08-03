@@ -115,6 +115,9 @@ function measureSingle(
       field("Extents", formatDelta(size)),
       field("AABB", `${formatVec3(box.min)} … ${formatVec3(box.max)}`),
     ];
+    if (face.leafId) {
+      fields.push(field("Field leaf", face.leafId));
+    }
     if (planar) {
       fields.push(field("Normal", formatDir(normal)));
       fields.push(field("Planar", "yes"));
@@ -126,12 +129,22 @@ function measureSingle(
 
   const soup = solidTriangleSoup(solid);
   const { volume, centroid } = meshVolumeCentroid(soup);
+  const fields: MeasureField[] = [
+    field("Volume", formatMm3(volume), volume),
+    field("Centroid", formatVec3(centroid)),
+  ];
+  if (solid.field) {
+    fields.push(field("Solid rep", "SDF field (+ mesh derivative)"));
+    const leaves = new Set(
+      solid.faces.map((f) => f.leafId).filter((id): id is string => !!id),
+    );
+    if (leaves.size > 0) {
+      fields.push(field("CSG leaves", [...leaves].join(", ")));
+    }
+  }
   return {
     title: `Solid · ${ref.id}`,
-    fields: [
-      field("Volume", formatMm3(volume), volume),
-      field("Centroid", formatVec3(centroid)),
-    ],
+    fields,
     empty: false,
   };
 }

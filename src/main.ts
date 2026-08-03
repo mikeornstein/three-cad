@@ -116,7 +116,9 @@ function main(): void {
     "select: click · multi: shift+click · filter: F · clear: Esc / empty click",
   );
   screenConsole?.log("ids copy to clipboard; measures update in the bottom bar");
-  screenConsole?.log("kernel: SDF field solid (mesh is display derivative)");
+  screenConsole?.log(
+    "kernel: SDF field solid · selection: field leaves + creases (mesh is pick accel)",
+  );
 
   try {
     const solid = createDemoSolid();

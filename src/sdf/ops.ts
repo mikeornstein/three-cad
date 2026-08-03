@@ -1,4 +1,5 @@
 import { translateAabb, unionAabb } from "./bounds";
+import { leafAt as resolveLeaf } from "./leaf";
 import type { FieldSolid, Vec3 } from "./types";
 
 /** Boolean union — bound field (min). Not always a true Euclidean SDF. */
@@ -8,6 +9,13 @@ export function union(a: FieldSolid, b: FieldSolid, leafId?: string): FieldSolid
     bounds: unionAabb(a.bounds, b.bounds),
     evaluate(x, y, z) {
       return Math.min(a.evaluate(x, y, z), b.evaluate(x, y, z));
+    },
+    leafAt(x, y, z) {
+      const da = a.evaluate(x, y, z);
+      const db = b.evaluate(x, y, z);
+      // Active child is the one closer to (or more inside) the surface of the union.
+      if (da <= db) return resolveLeaf(a, x, y, z);
+      return resolveLeaf(b, x, y, z);
     },
   };
 }
@@ -35,6 +43,13 @@ export function intersection(
     evaluate(x, y, z) {
       return Math.max(a.evaluate(x, y, z), b.evaluate(x, y, z));
     },
+    leafAt(x, y, z) {
+      const da = a.evaluate(x, y, z);
+      const db = b.evaluate(x, y, z);
+      // Constraining surface is the larger field value.
+      if (da >= db) return resolveLeaf(a, x, y, z);
+      return resolveLeaf(b, x, y, z);
+    },
   };
 }
 
@@ -50,10 +65,17 @@ export function difference(
     evaluate(x, y, z) {
       return Math.max(a.evaluate(x, y, z), -b.evaluate(x, y, z));
     },
+    leafAt(x, y, z) {
+      const da = a.evaluate(x, y, z);
+      const db = b.evaluate(x, y, z);
+      // Surface from a, or cavity wall from b.
+      if (da >= -db) return resolveLeaf(a, x, y, z);
+      return resolveLeaf(b, x, y, z);
+    },
   };
 }
 
-/** Translate a solid by an offset in mm. Preserves leafId. */
+/** Translate a solid by an offset in mm. Preserves leafId / leafAt. */
 export function translate(solid: FieldSolid, offset: Vec3): FieldSolid {
   const [tx, ty, tz] = offset;
   return {
@@ -61,6 +83,9 @@ export function translate(solid: FieldSolid, offset: Vec3): FieldSolid {
     bounds: translateAabb(solid.bounds, offset),
     evaluate(x, y, z) {
       return solid.evaluate(x - tx, y - ty, z - tz);
+    },
+    leafAt(x, y, z) {
+      return resolveLeaf(solid, x - tx, y - ty, z - tz);
     },
   };
 }
@@ -92,6 +117,9 @@ export function offset(
     evaluate(x, y, z) {
       return solid.evaluate(x, y, z) - delta;
     },
+    leafAt(x, y, z) {
+      return resolveLeaf(solid, x, y, z) ?? leafId ?? solid.leafId;
+    },
   };
 }
 
@@ -114,6 +142,13 @@ export function smoothUnion(
       const d2 = b.evaluate(x, y, z);
       const h = Math.min(Math.max(0.5 + 0.5 * (d2 - d1) / kk, 0), 1);
       return d2 * (1 - h) + d1 * h - kk * h * (1 - h);
+    },
+    leafAt(x, y, z) {
+      // Same ownership as hard union for selection labeling.
+      const da = a.evaluate(x, y, z);
+      const db = b.evaluate(x, y, z);
+      if (da <= db) return resolveLeaf(a, x, y, z);
+      return resolveLeaf(b, x, y, z);
     },
   };
 }

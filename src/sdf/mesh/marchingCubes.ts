@@ -139,8 +139,46 @@ export function fieldToMesh(
     }
   }
 
+  return weldMesh(
+    new Float32Array(positions),
+    new Uint32Array(indices),
+  );
+}
+
+/**
+ * Merge vertices that share the same quantized position so triangle
+ * adjacency (and selection topology) sees true manifold edges.
+ */
+function weldMesh(
+  positions: Float32Array,
+  indices: Uint32Array,
+  quant = 1e4, // 0.1 µm grid in mm units
+): DerivedMesh {
+  const map = new Map<string, number>();
+  const outPos: number[] = [];
+  const remap = new Int32Array(positions.length / 3);
+
+  for (let i = 0; i < positions.length; i += 3) {
+    const x = positions[i]!;
+    const y = positions[i + 1]!;
+    const z = positions[i + 2]!;
+    const key = `${Math.round(x * quant)}_${Math.round(y * quant)}_${Math.round(z * quant)}`;
+    let ni = map.get(key);
+    if (ni === undefined) {
+      ni = outPos.length / 3;
+      map.set(key, ni);
+      outPos.push(x, y, z);
+    }
+    remap[i / 3] = ni;
+  }
+
+  const outIdx = new Uint32Array(indices.length);
+  for (let i = 0; i < indices.length; i++) {
+    outIdx[i] = remap[indices[i]!]!;
+  }
+
   return {
-    positions: new Float32Array(positions),
-    indices: new Uint32Array(indices),
+    positions: new Float32Array(outPos),
+    indices: outIdx,
   };
 }
