@@ -18,11 +18,10 @@ import {
   Vector3,
 } from "three";
 import {
-  exactFeatures,
   fieldNormal,
   leafAt,
-  type ExactEdge,
-  type ExactFeatureSet,
+  measureEdgeOnField,
+  projectToSurface,
   type FieldSolid,
 } from "../sdf";
 import {
@@ -59,11 +58,11 @@ const AXIS_FACE_DOT = 0.9;
 export interface TopologyVertex {
   localId: string;
   id: string;
-  /** Index into the mesh position attribute (−1 if exact-only). */
+  /** Index into the mesh position attribute (−1 if field-only). */
   vertexIndex: number;
   position: Vector3;
-  /** True when position comes from constructive field features. */
-  exact?: boolean;
+  /** True when position was refined by projecting onto the field. */
+  fieldMeasured?: boolean;
 }
 
 export interface TopologyEdge {
@@ -79,12 +78,11 @@ export interface TopologyEdge {
   a: Vector3;
   b: Vector3;
   /**
-   * Authority length in mm. When set from constructive field source, this is
-   * exact (not polyline-sampled). Prefer this over summing `points`.
+   * Authority length in mm from field measure (prefer over summing `points`).
    */
   length?: number;
-  /** True when a/b/length come from exact field features. */
-  exact?: boolean;
+  /** True when a/b/length were refined by querying the field. */
+  fieldMeasured?: boolean;
 }
 
 export interface TopologyFace {
@@ -105,7 +103,7 @@ export interface TopologyFace {
    */
   area?: number;
   /** True when area/centroid/normal were refined from the field. */
-  exact?: boolean;
+  fieldMeasured?: boolean;
 }
 
 export interface SolidTopology {
@@ -635,7 +633,7 @@ function buildSolidTopology(
     }
   }
 
-  // Feature *chains* = one edge per face-pair (mesh accel for picking).
+  // Feature *chains* = one edge per face-pair (mesh structure for picking).
   let { edges, vertices, edgePositions, segmentToEdge, vertexPositions } =
     chainFeatureEdgesByFacePair({
       featureKeys,
@@ -645,17 +643,19 @@ function buildSolidTopology(
       solidId,
     });
 
-  // Prefer constructive exact features for vertex positions + edge lengths.
+  // Refine positions / lengths by querying the field (not the op-tree).
   if (field) {
-    const exact = exactFeatures(field);
-    if (exact && exact.edges.length > 0) {
-      const refined = topologyFromExactFeatures(exact, solidId);
-      edges = refined.edges;
-      vertices = refined.vertices;
-      edgePositions = refined.edgePositions;
-      segmentToEdge = refined.segmentToEdge;
-      vertexPositions = refined.vertexPositions;
-    }
+    const refined = refineTopologyFromField(
+      field,
+      edges,
+      vertices,
+      solidId,
+    );
+    edges = refined.edges;
+    vertices = refined.vertices;
+    edgePositions = refined.edgePositions;
+    segmentToEdge = refined.segmentToEdge;
+    vertexPositions = refined.vertexPositions;
   }
 
   return {
@@ -677,11 +677,13 @@ function buildSolidTopology(
 }
 
 /**
- * Build selection edges/vertices directly from exact field features.
- * Face regions still come from the mesh; pick helpers use exact polylines.
+ * Project mesh edge seeds onto the field and measure lengths from f.
+ * Rebuilds pick buffers from field-measured polylines.
  */
-function topologyFromExactFeatures(
-  exact: ExactFeatureSet,
+function refineTopologyFromField(
+  field: FieldSolid,
+  edgesIn: TopologyEdge[],
+  verticesIn: TopologyVertex[],
   solidId: string,
 ): {
   edges: TopologyEdge[];
@@ -690,17 +692,6 @@ function topologyFromExactFeatures(
   segmentToEdge: Int32Array;
   vertexPositions: Float32Array;
 } {
-  const vertices: TopologyVertex[] = exact.vertices.map((v, i) => {
-    const localId = `v${i}`;
-    return {
-      localId,
-      id: makeEntityId("vertex", solidId, localId),
-      vertexIndex: -1,
-      position: new Vector3(v.position[0], v.position[1], v.position[2]),
-      exact: true,
-    };
-  });
-
   const edges: TopologyEdge[] = [];
   const segmentPairs: {
     ax: number;
@@ -712,11 +703,14 @@ function topologyFromExactFeatures(
     edgeIndex: number;
   }[] = [];
 
-  for (const e of exact.edges) {
-    const points = sampleExactEdge(e);
-    if (points.length < 2) continue;
-    const localId = `e${edges.length}`;
+  for (const raw of edgesIn) {
+    const measured = measureEdgeOnField(field, raw.points);
+    if (!measured || measured.points.length < 2) continue;
+    const points = measured.points.map(
+      (p) => new Vector3(p[0], p[1], p[2]),
+    );
     const edgeIndex = edges.length;
+    const localId = `e${edgeIndex}`;
     edges.push({
       localId,
       id: makeEntityId("edge", solidId, localId),
@@ -726,8 +720,8 @@ function topologyFromExactFeatures(
       v1: -1,
       a: points[0]!.clone(),
       b: points[points.length - 1]!.clone(),
-      length: e.length,
-      exact: true,
+      length: measured.length,
+      fieldMeasured: true,
     });
     for (let i = 0; i < points.length - 1; i++) {
       const A = points[i]!;
@@ -742,6 +736,45 @@ function topologyFromExactFeatures(
         edgeIndex,
       });
     }
+  }
+
+  // Vertices: project mesh seeds, then add edge endpoints; weld.
+  const rawVerts: TopologyVertex[] = [];
+  for (const v of verticesIn) {
+    const p = projectToSurface(
+      field,
+      v.position.x,
+      v.position.y,
+      v.position.z,
+    );
+    if (!p) continue;
+    rawVerts.push({
+      localId: "",
+      id: "",
+      vertexIndex: v.vertexIndex,
+      position: new Vector3(p[0], p[1], p[2]),
+      fieldMeasured: true,
+    });
+  }
+  for (const e of edges) {
+    rawVerts.push({
+      localId: "",
+      id: "",
+      vertexIndex: -1,
+      position: e.a.clone(),
+      fieldMeasured: true,
+    });
+    rawVerts.push({
+      localId: "",
+      id: "",
+      vertexIndex: -1,
+      position: e.b.clone(),
+      fieldMeasured: true,
+    });
+  }
+  const vertices = weldNearbyVertices(rawVerts, solidId, 1.25);
+  for (const v of vertices) {
+    v.fieldMeasured = true;
   }
 
   const edgePositions = new Float32Array(segmentPairs.length * 6);
@@ -766,48 +799,6 @@ function topologyFromExactFeatures(
   });
 
   return { edges, vertices, edgePositions, segmentToEdge, vertexPositions };
-}
-
-/** Dense samples for highlight/pick; length stays on ExactEdge. */
-function sampleExactEdge(e: ExactEdge): Vector3[] {
-  if (e.kind === "line") {
-    return [
-      new Vector3(e.a[0], e.a[1], e.a[2]),
-      new Vector3(e.b[0], e.b[1], e.b[2]),
-    ];
-  }
-  const c = new Vector3(e.center[0], e.center[1], e.center[2]);
-  const from = new Vector3(e.a[0], e.a[1], e.a[2]).sub(c);
-  const to = new Vector3(e.b[0], e.b[1], e.b[2]).sub(c);
-  const u = from.clone().normalize();
-  let w = new Vector3().crossVectors(from, to);
-  if (w.lengthSq() < 1e-20) {
-    w =
-      Math.abs(u.x) < 0.9
-        ? new Vector3().crossVectors(u, new Vector3(1, 0, 0))
-        : new Vector3().crossVectors(u, new Vector3(0, 1, 0));
-  }
-  w.normalize();
-  let v = new Vector3().crossVectors(w, u).normalize();
-  // Orient v so sweeping +angle reaches `to`.
-  const toN = to.clone().normalize();
-  if (toN.dot(v) < 0) v.negate();
-
-  const angle = e.angle;
-  const steps = Math.max(8, Math.ceil((angle / (Math.PI / 2)) * 32));
-  const pts: Vector3[] = [];
-  for (let i = 0; i <= steps; i++) {
-    const t = (i / steps) * angle;
-    pts.push(
-      c
-        .clone()
-        .addScaledVector(u, e.radius * Math.cos(t))
-        .addScaledVector(v, e.radius * Math.sin(t)),
-    );
-  }
-  pts[0]!.set(e.a[0], e.a[1], e.a[2]);
-  pts[pts.length - 1]!.set(e.b[0], e.b[1], e.b[2]);
-  return pts;
 }
 
 type EdgeRec = { v0: number; v1: number; tris: number[] };

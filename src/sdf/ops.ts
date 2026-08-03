@@ -7,7 +7,6 @@ export function union(a: FieldSolid, b: FieldSolid, leafId?: string): FieldSolid
   return {
     leafId,
     bounds: unionAabb(a.bounds, b.bounds),
-    source: { op: "union", a, b },
     evaluate(x, y, z) {
       return Math.min(a.evaluate(x, y, z), b.evaluate(x, y, z));
     },
@@ -40,7 +39,6 @@ export function intersection(
         Math.min(a.bounds.max[2], b.bounds.max[2]),
       ],
     },
-    source: { op: "intersection", a, b },
     evaluate(x, y, z) {
       return Math.max(a.evaluate(x, y, z), b.evaluate(x, y, z));
     },
@@ -62,7 +60,6 @@ export function difference(
   return {
     leafId,
     bounds: a.bounds,
-    source: { op: "difference", a, b },
     evaluate(x, y, z) {
       return Math.max(a.evaluate(x, y, z), -b.evaluate(x, y, z));
     },
@@ -81,7 +78,6 @@ export function translate(solid: FieldSolid, offset: Vec3): FieldSolid {
   return {
     leafId: solid.leafId,
     bounds: translateAabb(solid.bounds, offset),
-    source: { op: "translate", solid, offset },
     evaluate(x, y, z) {
       return solid.evaluate(x - tx, y - ty, z - tz);
     },
@@ -115,7 +111,6 @@ export function offset(
         solid.bounds.max[2] + pad,
       ],
     },
-    source: { op: "offset", solid, delta },
     evaluate(x, y, z) {
       return solid.evaluate(x, y, z) - delta;
     },
@@ -139,7 +134,6 @@ export function smoothUnion(
   return {
     leafId,
     bounds: unionAabb(a.bounds, b.bounds),
-    source: { op: "smoothUnion", a, b, k: kk },
     evaluate(x, y, z) {
       const d1 = a.evaluate(x, y, z);
       const d2 = b.evaluate(x, y, z);
