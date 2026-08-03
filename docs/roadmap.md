@@ -37,10 +37,11 @@ A **text-first** mechanical assembly workbench: plain language in, **field-evalu
 
 - [x] Vite + TypeScript + Three.js host  
 - [x] Viewport: orbit / pan / zoom, mm grid, **Z-up**  
-- [x] SDF kernel scaffold (`src/sdf/`): primitives, CSG, marching-cubes mesh  
+- [x] SDF kernel scaffold (`src/sdf/`): primitives, CSG, marching-cubes mesh (export)  
 - [x] Demo solid via SDF (cube ∪ sphere in mm — not full evaluator)  
 - [x] Manifold dependency removed from product path  
-- [x] Mesh-era selection + measure bar (migration debt; rebuild under #14)  
+- [x] GPU sphere-trace viewport (`src/render/`) — FieldNode → GLSL; no display meshing  
+- [x] Mesh-era selection + measure bar (migration debt; face/solid field pick for ray-march)  
 
 **Still to do (re-aimed for fields):**
 
@@ -162,7 +163,7 @@ A **text-first** mechanical assembly workbench: plain language in, **field-evalu
 | Units | mm internal only |
 | Transform convention | **Z-up**, right-handed (decided with first viewport) |
 | Kernel class | **SDF / implicit field solids** (plan of record) |
-| Mesh role | Derivative only (display, export, transitional picking) |
+| Mesh role | **Export only** (display = GPU sphere-trace) |
 | Export | STL first; glTF for structure; 3MF when needed |
 
 ---
@@ -175,7 +176,7 @@ A **text-first** mechanical assembly workbench: plain language in, **field-evalu
 4. **Subassemblies:** instance parent tree only, or nested documents?  
 5. **When to invest in sheet flat pattern** vs visual bent form only?  
 6. **Repair / field-quality policy for bad STLs:** auto-approx silent vs always warn?  
-7. **Display:** ray-march mode vs always tessellate for picking?  
+7. ~~**Display:** ray-march vs tessellate?~~ → **GPU sphere-trace display; mesh export-only** (#30)  
 8. **Mesher:** dual contouring timeline for sharp mechanical edges?  
 9. **WASM:** stay pure TS longer, or port libfive-class F-rep?  
 

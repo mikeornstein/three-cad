@@ -141,10 +141,13 @@ function main(): void {
   );
   screenConsole?.log("ids copy to clipboard; measures update in the bottom bar");
   screenConsole?.log(
-    "kernel: SDF field solid · selection: field leaves + creases (mesh is pick accel)",
+    "kernel: SDF field solid · display: GPU sphere-trace (no mesh)",
   );
   screenConsole?.log(
-    "eval: document PartDef → definitionHash cache → field + mesh",
+    "eval: document PartDef → definitionHash cache → field; mesh export-only",
+  );
+  screenConsole?.log(
+    "select: solid/face via field ray · edge/vertex filters need creases (later)",
   );
   screenConsole?.log(
     "build tree (left): construction ops · click row to copy summary",

@@ -20,6 +20,11 @@ import {
 } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import {
+  isRayMarchMesh,
+  setRayMarchDisplayMode,
+  updateRayMarchUniforms,
+} from "../render";
+import {
   type DisplayMode,
   displayModeLabel,
   nextDisplayMode,
@@ -150,6 +155,13 @@ export class Viewport {
     for (const mesh of this.solidMeshes) {
       // Keep solid mesh itself visible in solid/mesh/wire modes.
       mesh.visible = true;
+
+      // Field sphere-trace: mode is a shader uniform (no triangle edges).
+      if (isRayMarchMesh(mesh)) {
+        setRayMarchDisplayMode(mesh, this.displayMode);
+        continue;
+      }
+
       const materials = Array.isArray(mesh.material)
         ? mesh.material
         : [mesh.material];
@@ -168,6 +180,7 @@ export class Viewport {
     }
 
     for (const lines of this.edgeOverlays) {
+      // Ray-march solids do not build mesh edge overlays.
       lines.visible = showEdges;
     }
   }
@@ -181,9 +194,11 @@ export class Viewport {
 
     // Feature edges (dihedral > threshold). Coplanar triangulation diagonals stay hidden.
     // ~20° keeps cube/sphere crease edges without every geodesic facet on a fine sphere.
+    // Skip ray-march proxies (AABB only — edges would be the bounding box).
     const thresholdAngle = 20;
 
     for (const mesh of this.solidMeshes) {
+      if (isRayMarchMesh(mesh)) continue;
       const edges = new EdgesGeometry(mesh.geometry, thresholdAngle);
       const lines = new LineSegments(
         edges,
@@ -248,6 +263,17 @@ export class Viewport {
     if (this.disposed) return;
     this.animationId = requestAnimationFrame(this.loop);
     this.controls.update();
+    this.camera.updateMatrixWorld();
+    // Sphere-trace shaders need camera + matrices each frame.
+    for (const mesh of this.solidMeshes) {
+      if (!isRayMarchMesh(mesh)) continue;
+      updateRayMarchUniforms(
+        mesh,
+        this.camera.position,
+        this.camera.projectionMatrix,
+        this.camera.matrixWorldInverse,
+      );
+    }
     this.renderer.render(this.scene, this.camera);
   };
 }
