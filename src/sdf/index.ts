@@ -3,6 +3,7 @@
  *
  * Document intent is authority. FieldSolid is the solid representation.
  * Meshes from fieldToMesh are display/export derivatives only.
+ * Measurement queries the field (see fieldMeasure), not an op-tree.
  */
 
 export type {
@@ -30,17 +31,15 @@ export {
 export { fieldToMesh } from "./mesh/marchingCubes";
 export { fieldGradient, fieldNormal, leafAt } from "./leaf";
 export {
-  exactFeatures,
+  FIELD_LINEAR_TOL_MM,
   MICRON_MM,
+  measureEdgeOnField,
+  measurePlanarFaceFromField,
   nearlyEqual,
   nearlyEqualVec,
-  type ExactEdge,
-  type ExactFeatureSet,
-  type ExactVertex,
-} from "./exactFeatures";
-export {
-  FIELD_LINEAR_TOL_MM,
-  measurePlanarFaceFromField,
+  projectPointOnField,
+  projectToCrease,
   projectToSurface,
+  type EdgeMeasure,
   type PlanarFaceMeasure,
 } from "./fieldMeasure";

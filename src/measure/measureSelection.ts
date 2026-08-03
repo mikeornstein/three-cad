@@ -86,7 +86,7 @@ function measureSingle(
     const fields: MeasureField[] = [
       field("Position", formatVec3(v.position)),
     ];
-    if (v.exact) fields.push(field("Geometry", "exact (field source)"));
+    if (v.fieldMeasured) fields.push(field("Geometry", "field measure"));
     return {
       title: `Vertex · ${ref.id}`,
       fields,
@@ -96,7 +96,7 @@ function measureSingle(
 
   if (kind === "edge") {
     const e = solid.edges[localIndex]!;
-    // Prefer exact constructive length when present (field source).
+    // Prefer field-measured length when present.
     const length =
       e.length !== undefined ? e.length : polylineLength(e.points);
     const mid = polylinePointAt(e.points, 0.5);
@@ -105,7 +105,7 @@ function measureSingle(
       field("Midpoint", formatVec3(mid)),
       field("Ends", `${formatVec3(e.a)} → ${formatVec3(e.b)}`),
     ];
-    if (e.exact) fields.push(field("Geometry", "exact (field source)"));
+    if (e.fieldMeasured) fields.push(field("Geometry", "field measure"));
     return {
       title: `Edge · ${ref.id}`,
       fields,
@@ -647,7 +647,7 @@ function field(label: string, value: string, numeric?: number): MeasureField {
 
 /**
  * Refine face area / frame from the field solid when available.
- * Mutates face.area / exact for reuse.
+ * Mutates face.area / fieldMeasured for reuse.
  */
 function refineFaceFromField(
   solid: SolidTopology,
@@ -655,7 +655,7 @@ function refineFaceFromField(
   meshCentroid: Vector3,
   meshNormal: Vector3,
 ): ReturnType<typeof measurePlanarFaceFromField> {
-  if (face.exact && face.area !== undefined) {
+  if (face.fieldMeasured && face.area !== undefined) {
     return {
       area: face.area,
       normal: [face.normal.x, face.normal.y, face.normal.z],
@@ -683,7 +683,7 @@ function refineFaceFromField(
   if (!metric) return null;
 
   face.area = metric.area;
-  face.exact = true;
+  face.fieldMeasured = true;
   face.centroid.set(
     metric.centroid[0],
     metric.centroid[1],
@@ -697,7 +697,7 @@ function refineFaceFromField(
 export function attachFieldFaceMetrics(solid: SolidTopology): void {
   if (!solid.field) return;
   for (const face of solid.faces) {
-    if (face.exact && face.area !== undefined) continue;
+    if (face.fieldMeasured && face.area !== undefined) continue;
     refineFaceFromField(solid, face, face.centroid, face.normal);
   }
 }
