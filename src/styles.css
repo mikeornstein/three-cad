@@ -87,7 +87,7 @@ body {
 #console {
   position: absolute;
   left: 12px;
-  bottom: 12px;
+  bottom: 72px;
   width: min(420px, calc(100vw - 24px));
   max-height: min(220px, 32vh);
   display: flex;
@@ -131,4 +131,102 @@ body {
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+#measure-bar,
+.measure-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 16px;
+  padding: 8px 14px 10px;
+  border-top: 1px solid #3a4149;
+  background: rgba(16, 18, 20, 0.94);
+  box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.28);
+  pointer-events: auto;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.measure-bar[data-empty="true"] {
+  color: #8b949e;
+}
+
+.measure-bar-title {
+  flex: 0 0 auto;
+  max-width: 100%;
+  color: #9ecbff;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.measure-bar[data-empty="true"] .measure-bar-title {
+  color: #8b949e;
+  font-weight: 500;
+}
+
+.measure-bar-fields {
+  flex: 1 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  min-width: 0;
+  align-items: baseline;
+}
+
+.measure-field {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.measure-field-label {
+  color: #8b949e;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.measure-field-value {
+  color: #e8eaed;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.measure-field-value:hover {
+  color: #fff;
+  background: rgba(110, 159, 212, 0.18);
+}
+
+.measure-field-value:focus-visible {
+  outline: 1px solid #6e9fd4;
+  outline-offset: 1px;
+}
+
+.measure-field-value.copied {
+  color: #7dcea0;
 }
