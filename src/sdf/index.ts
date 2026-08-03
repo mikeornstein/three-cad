@@ -53,6 +53,7 @@ export {
   planeBasis,
 } from "./fieldFeatures";
 export {
+  densifyRegionForHighlight,
   growSurfaceRegion,
   type GrowSurfaceRegionOpts,
   type SurfaceRegion,

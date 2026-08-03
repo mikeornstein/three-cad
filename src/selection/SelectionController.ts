@@ -10,7 +10,12 @@ import {
   pickFieldAtPointer,
 } from "../render";
 import { buildRayMarchTopologyIndex } from "../render/fieldTopology";
-import { growSurfaceRegion, type SurfaceRegion } from "../sdf";
+import {
+  densifyRegionForHighlight,
+  growSurfaceRegion,
+  type SurfaceRegion,
+} from "../sdf";
+
 import { SelectionHighlight } from "./highlight";
 import { buildPickHelpers, pickAtPointer } from "./pick";
 import { SelectionStore } from "./SelectionStore";
@@ -324,6 +329,12 @@ function ensureRegionFace(
     region.meanNormal[2],
   );
 
+  const dense =
+    solid.field != null
+      ? densifyRegionForHighlight(solid.field, region)
+      : null;
+  const seed = new Vector3(region.seed[0], region.seed[1], region.seed[2]);
+
   if (faceIndex < 0) {
     faceIndex = solid.faces.length;
     const id = makeEntityId("face", solid.solidId, localId);
@@ -335,6 +346,9 @@ function ensureRegionFace(
       centroid,
       normal,
       fieldMeasured: true,
+      regionSamples: dense?.positions,
+      regionNormals: dense?.normals,
+      regionSeed: seed,
     });
     topology.byEntityId.set(id, {
       solid,
@@ -347,6 +361,9 @@ function ensureRegionFace(
     face.normal.copy(normal);
     face.leafId = region.leafId;
     face.fieldMeasured = true;
+    face.regionSamples = dense?.positions;
+    face.regionNormals = dense?.normals;
+    face.regionSeed = seed;
   }
   return faceIndex;
 }

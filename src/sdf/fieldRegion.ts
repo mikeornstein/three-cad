@@ -269,3 +269,118 @@ function normalize3(
   if (len < 1e-12) return null;
   return [x / len, y / len, z / len];
 }
+
+/**
+ * Densify a grown region for highlight: planar → UV grid membership;
+ * freeform → original samples (already surface points).
+ * Returns interleaved xyz positions + normals.
+ */
+export function densifyRegionForHighlight(
+  field: FieldSolid,
+  region: SurfaceRegion,
+  opts?: { cellMm?: number; maxPoints?: number },
+): { positions: Float32Array; normals: Float32Array } {
+  const cell = opts?.cellMm ?? 0.85;
+  const maxPoints = opts?.maxPoints ?? 2500;
+
+  if (!region.planar || region.samples.length < 3) {
+    return packSamplesWithNormals(field, region.samples, maxPoints);
+  }
+
+  const n = region.meanNormal;
+  const [u, v] = planeBasis(n);
+  const o = region.centroid;
+  let uMin = Infinity;
+  let uMax = -Infinity;
+  let vMin = Infinity;
+  let vMax = -Infinity;
+  for (const s of region.samples) {
+    const dx = s[0] - o[0];
+    const dy = s[1] - o[1];
+    const dz = s[2] - o[2];
+    const su = dx * u[0] + dy * u[1] + dz * u[2];
+    const sv = dx * v[0] + dy * v[1] + dz * v[2];
+    uMin = Math.min(uMin, su);
+    uMax = Math.max(uMax, su);
+    vMin = Math.min(vMin, sv);
+    vMax = Math.max(vMax, sv);
+  }
+  // Slight pad so discs cover to the crease without spilling much.
+  const pad = cell * 0.5;
+  uMin -= pad;
+  uMax += pad;
+  vMin -= pad;
+  vMax += pad;
+
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const seedLeaf = region.leafId;
+  const seedN = region.meanNormal;
+  const planarCos = Math.cos((18 * Math.PI) / 180);
+
+  for (let su = uMin; su <= uMax + 1e-9; su += cell) {
+    for (let sv = vMin; sv <= vMax + 1e-9; sv += cell) {
+      if (positions.length / 3 >= maxPoints) break;
+      const raw: Vec3 = [
+        o[0] + u[0] * su + v[0] * sv,
+        o[1] + u[1] * su + v[1] * sv,
+        o[2] + u[2] * su + v[2] * sv,
+      ];
+      // Nudge slightly outside then project so we land on the surface.
+      const nudged: Vec3 = [
+        raw[0] + n[0] * 0.5,
+        raw[1] + n[1] * 0.5,
+        raw[2] + n[2] * 0.5,
+      ];
+      const q = projectToSurface(field, nudged[0], nudged[1], nudged[2], {
+        tol: 1e-5,
+      });
+      if (!q) continue;
+      if (featureScore(field, q) >= FEATURE_MIN) continue;
+      const qn = fieldNormal(field, q[0], q[1], q[2]);
+      if (!qn) continue;
+      const dot =
+        qn[0] * seedN[0] + qn[1] * seedN[1] + qn[2] * seedN[2];
+      if (dot < planarCos) continue;
+      if (seedLeaf) {
+        const qLeaf = leafAt(field, q[0], q[1], q[2]);
+        if (qLeaf && qLeaf !== seedLeaf) continue;
+      }
+      positions.push(q[0], q[1], q[2]);
+      normals.push(qn[0], qn[1], qn[2]);
+    }
+  }
+
+  if (positions.length < 9) {
+    return packSamplesWithNormals(field, region.samples, maxPoints);
+  }
+  return {
+    positions: new Float32Array(positions),
+    normals: new Float32Array(normals),
+  };
+}
+
+function packSamplesWithNormals(
+  field: FieldSolid,
+  samples: readonly Vec3[],
+  maxPoints: number,
+): { positions: Float32Array; normals: Float32Array } {
+  const n = Math.min(samples.length, maxPoints);
+  const positions = new Float32Array(n * 3);
+  const normals = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const s = samples[i]!;
+    positions[i * 3] = s[0];
+    positions[i * 3 + 1] = s[1];
+    positions[i * 3 + 2] = s[2];
+    const nn = fieldNormal(field, s[0], s[1], s[2]);
+    if (nn) {
+      normals[i * 3] = nn[0];
+      normals[i * 3 + 1] = nn[1];
+      normals[i * 3 + 2] = nn[2];
+    } else {
+      normals[i * 3 + 2] = 1;
+    }
+  }
+  return { positions, normals };
+}
