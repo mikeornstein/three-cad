@@ -21,6 +21,46 @@ export interface Aabb {
 }
 
 /**
+ * Constructive source of a field solid — used for exact feature extraction
+ * (vertex positions, edge lengths) independent of mesh tessellation.
+ */
+export type FieldSource =
+  | {
+      op: "box";
+      min: Vec3;
+      max: Vec3;
+    }
+  | {
+      op: "sphere";
+      center: Vec3;
+      radius: number;
+    }
+  | {
+      op: "cylinder";
+      centerXy: readonly [number, number];
+      radius: number;
+      zMin: number;
+      zMax: number;
+    }
+  | {
+      op: "union" | "intersection" | "difference" | "smoothUnion";
+      a: FieldSolid;
+      b: FieldSolid;
+      /** smoothUnion only */
+      k?: number;
+    }
+  | {
+      op: "translate";
+      solid: FieldSolid;
+      offset: Vec3;
+    }
+  | {
+      op: "offset";
+      solid: FieldSolid;
+      delta: number;
+    };
+
+/**
  * Evaluable implicit solid. Pure data + evaluate — no mesh authority.
  */
 export interface FieldSolid {
@@ -38,6 +78,11 @@ export interface FieldSolid {
    * Defaults to {@link leafId} when omitted (true for primitives).
    */
   leafAt?(x: number, y: number, z: number): string | undefined;
+  /**
+   * Constructive definition for exact topology / measure.
+   * When present, vertices and edge lengths can be recovered to machine precision.
+   */
+  readonly source?: FieldSource;
 }
 
 export interface MeshQuality {
