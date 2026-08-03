@@ -2,7 +2,7 @@
  * SDF / implicit field solid types.
  *
  * Authority solid representation for three-cad (#14).
- * Meshes are derived only (display / export / temporary picking).
+ * Meshes are derived only (export). Interactive display is field ray-march.
  *
  * Sign convention (mm):
  *   f < 0  inside
@@ -51,7 +51,7 @@ export interface MeshQuality {
   readonly padMm?: number;
 }
 
-/** Triangle soup derived from a field (display / export only). */
+/** Triangle soup derived from a field (export only; not for interactive display). */
 export interface DerivedMesh {
   /** Interleaved xyz positions (mm), length = 3 * vertexCount. */
   readonly positions: Float32Array;

@@ -70,12 +70,6 @@ body {
   outline-offset: 2px;
 }
 
-#toolbar button[data-mode="mesh"],
-#toolbar button[data-mode="wireframe"] {
-  border-color: #6e9fd4;
-  background: rgba(40, 60, 85, 0.9);
-}
-
 #toolbar button[data-filter="solid"],
 #toolbar button[data-filter="face"],
 #toolbar button[data-filter="edge"],

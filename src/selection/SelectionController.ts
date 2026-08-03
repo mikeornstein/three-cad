@@ -1,8 +1,17 @@
 import type { Mesh, Object3D, PerspectiveCamera, Scene } from "three";
+import {
+  isRayMarchMesh,
+  pickFieldAtPointer,
+} from "../render";
+import { buildRayMarchTopologyIndex } from "../render/fieldTopology";
 import { SelectionHighlight } from "./highlight";
 import { buildPickHelpers, pickAtPointer } from "./pick";
 import { SelectionStore } from "./SelectionStore";
-import { buildTopologyIndex, type TopologyIndex } from "./topology";
+import {
+  buildTopologyIndex,
+  refFromTopology,
+  type TopologyIndex,
+} from "./topology";
 import {
   formatSelectionClipboard,
   nextSelectionFilter,
@@ -80,17 +89,30 @@ export class SelectionController {
   /**
    * Rebuild field-native topology + pick helpers from solid meshes.
    * Expects `mesh.userData.fieldSolid` when the authority field is available.
+   * Ray-march display meshes use leaf faces + CPU sphere-trace pick (no MC).
    * Call after Viewport.setContent (or whenever evaluated geometry changes).
    */
   setMeshes(meshes: readonly Mesh[]): void {
     this.disposePickHelpers();
     this.solidMeshes = [...meshes];
-    this.topology = buildTopologyIndex(this.solidMeshes);
-    this.highlight.setTopology(this.topology);
-    this.pickHelpers = buildPickHelpers(this.topology);
-    for (const h of this.pickHelpers) {
-      this.opts.scene.add(h);
+
+    const rayMarch = this.solidMeshes.filter(isRayMarchMesh);
+    const tessellated = this.solidMeshes.filter((m) => !isRayMarchMesh(m));
+
+    if (rayMarch.length > 0 && tessellated.length === 0) {
+      this.topology = buildRayMarchTopologyIndex(rayMarch);
+      this.pickHelpers = [];
+    } else {
+      this.topology = buildTopologyIndex(
+        tessellated.length > 0 ? tessellated : this.solidMeshes,
+      );
+      this.pickHelpers = buildPickHelpers(this.topology);
+      for (const h of this.pickHelpers) {
+        this.opts.scene.add(h);
+      }
     }
+
+    this.highlight.setTopology(this.topology);
     this.store.clear();
 
     const summary = this.topology.solids
@@ -100,11 +122,15 @@ export class SelectionController {
         );
         const leafPart =
           leaves.size > 0 ? `, leaves [${[...leaves].join(", ")}]` : ", no field leaves";
-        const fieldPart = s.field ? "field" : "mesh-only";
+        const fieldPart = isRayMarchMesh(s.mesh)
+          ? "field-raymarch"
+          : s.field
+            ? "field"
+            : "mesh-only";
         return `${s.solidId} (${fieldPart}): ${s.faces.length} faces, ${s.edges.length} edges, ${s.vertices.length} verts${leafPart}`;
       })
       .join("; ");
-    this.opts.onInfo?.(`selection topology — ${summary}`);
+    this.opts.onInfo?.(`selection topology — ${summary || "empty"}`);
   }
 
   getTopology(): TopologyIndex | null {
@@ -180,14 +206,7 @@ export class SelectionController {
 
     if (!this.topology) return;
 
-    const hit = pickAtPointer(event.clientX, event.clientY, {
-      camera: this.opts.camera,
-      canvas: this.opts.canvas,
-      solidMeshes: this.solidMeshes,
-      pickHelpers: this.pickHelpers,
-      topology: this.topology,
-      filter: this.filter,
-    });
+    const hit = this.resolvePick(event.clientX, event.clientY);
 
     if (event.shiftKey) {
       if (hit) this.store.toggle(hit);
@@ -201,6 +220,66 @@ export class SelectionController {
       this.store.clear();
     }
   };
+
+  private resolvePick(clientX: number, clientY: number): SelectionRef | null {
+    if (!this.topology) return null;
+
+    const rayMarchSolids = this.topology.solids.filter((s) =>
+      isRayMarchMesh(s.mesh),
+    );
+
+    // Mesh-free pick path for GPU sphere-trace display.
+    if (rayMarchSolids.length > 0) {
+      const filter = this.filter;
+      // Edge/vertex filters need crease topology — not yet field-native without mesh.
+      if (filter === "edge" || filter === "vertex") {
+        return null;
+      }
+
+      const targets = rayMarchSolids
+        .filter((s) => s.field)
+        .map((s) => ({ field: s.field!, solidId: s.solidId }));
+      const fieldHit = pickFieldAtPointer(
+        clientX,
+        clientY,
+        this.opts.camera,
+        this.opts.canvas,
+        targets,
+      );
+      if (!fieldHit) return null;
+
+      const solid =
+        rayMarchSolids.find((s) => s.solidId === fieldHit.solidId) ??
+        rayMarchSolids[0]!;
+
+      if (filter === "solid") {
+        return refFromTopology(solid, "solid", 0);
+      }
+
+      // face or all → map leaf id to face when possible
+      if (fieldHit.leafId) {
+        const faceIndex = solid.faces.findIndex(
+          (f) => f.leafId === fieldHit.leafId,
+        );
+        if (faceIndex >= 0) {
+          const face = solid.faces[faceIndex]!;
+          face.centroid.copy(fieldHit.point);
+          face.normal.copy(fieldHit.normal);
+          return refFromTopology(solid, "face", faceIndex);
+        }
+      }
+      return refFromTopology(solid, "solid", 0);
+    }
+
+    return pickAtPointer(clientX, clientY, {
+      camera: this.opts.camera,
+      canvas: this.opts.canvas,
+      solidMeshes: this.solidMeshes,
+      pickHelpers: this.pickHelpers,
+      topology: this.topology,
+      filter: this.filter,
+    });
+  }
 
   private emitClipboard(refs: readonly SelectionRef[]): void {
     const text = formatSelectionClipboard(refs);

@@ -93,6 +93,18 @@ export class SelectionHighlight {
   }
 
   private addSolidHighlight(id: string, solid: SolidTopology): void {
+    // Ray-marched solids have no triangle soup — mark with a sphere at centroid.
+    if (solid.triToFace.length === 0 && solid.field) {
+      const c = new Vector3(
+        (solid.field.bounds.min[0] + solid.field.bounds.max[0]) * 0.5,
+        (solid.field.bounds.min[1] + solid.field.bounds.max[1]) * 0.5,
+        (solid.field.bounds.min[2] + solid.field.bounds.max[2]) * 0.5,
+      );
+      this.addVertexHighlight(`solid-mark:${id}`, c);
+      // Soft AABB wire outline
+      this.addBoundsWire(solid);
+      return;
+    }
     const geom = solidHighlightGeometry(solid);
     const mesh = new Mesh(
       geom,
@@ -138,6 +150,11 @@ export class SelectionHighlight {
     solid: SolidTopology,
     face: TopologyFace,
   ): void {
+    // Field-leaf faces (ray-march) have no triangles — marker at measured centroid.
+    if (face.triangleIndices.length === 0) {
+      this.addVertexHighlight(`face-mark:${id}`, face.centroid.clone());
+      return;
+    }
     const geom = faceHighlightGeometry(solid, face);
     const mesh = new Mesh(
       geom,
@@ -156,6 +173,65 @@ export class SelectionHighlight {
     mesh.name = `hl-face:${id}`;
     mesh.renderOrder = 3;
     this.group.add(mesh);
+  }
+
+  /** AABB wireframe for field solids without a display mesh. */
+  private addBoundsWire(solid: SolidTopology): void {
+    const field = solid.field;
+    if (!field) return;
+    const [x0, y0, z0] = field.bounds.min;
+    const [x1, y1, z1] = field.bounds.max;
+    const corners = [
+      [x0, y0, z0],
+      [x1, y0, z0],
+      [x1, y1, z0],
+      [x0, y1, z0],
+      [x0, y0, z1],
+      [x1, y0, z1],
+      [x1, y1, z1],
+      [x0, y1, z1],
+    ] as const;
+    const edges: readonly [number, number][] = [
+      [0, 1],
+      [1, 2],
+      [2, 3],
+      [3, 0],
+      [4, 5],
+      [5, 6],
+      [6, 7],
+      [7, 4],
+      [0, 4],
+      [1, 5],
+      [2, 6],
+      [3, 7],
+    ];
+    const positions = new Float32Array(edges.length * 6);
+    let w = 0;
+    for (const [a, b] of edges) {
+      const ca = corners[a]!;
+      const cb = corners[b]!;
+      positions[w++] = ca[0];
+      positions[w++] = ca[1];
+      positions[w++] = ca[2];
+      positions[w++] = cb[0];
+      positions[w++] = cb[1];
+      positions[w++] = cb[2];
+    }
+    const lineGeom = new BufferGeometry();
+    lineGeom.setAttribute("position", new BufferAttribute(positions, 3));
+    const lines = new LineSegments(
+      lineGeom,
+      new LineBasicMaterial({
+        color: HIGHLIGHT_SOLID,
+        transparent: true,
+        opacity: 0.9,
+        depthTest: true,
+        depthWrite: false,
+      }),
+    );
+    lines.name = `hl-bounds:${solid.solidId}`;
+    lines.renderOrder = 4;
+    this.group.add(lines);
   }
 
   private addEdgeHighlight(

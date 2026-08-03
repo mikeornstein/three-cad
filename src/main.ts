@@ -12,7 +12,7 @@ import {
 import { BuildTreePanel } from "./ui/BuildTreePanel";
 import { MeasureBar } from "./ui/MeasureBar";
 import { OnscreenConsole } from "./ui/OnscreenConsole";
-import { displayModeLabel, Viewport } from "./viewport/Viewport";
+import { Viewport } from "./viewport/Viewport";
 
 function main(): void {
   const canvas = document.querySelector<HTMLCanvasElement>("#viewport");
@@ -39,7 +39,6 @@ function main(): void {
   buildTree?.setPart(demoPartDef());
 
   const viewport = new Viewport(canvas);
-  const modeButton = document.querySelector<HTMLButtonElement>("#display-mode");
   const filterButton =
     document.querySelector<HTMLButtonElement>("#selection-filter");
 
@@ -74,17 +73,6 @@ function main(): void {
   refreshMeasures(selection.store.getRefs());
   syncBuildTreeLeaves(selection.store.getRefs());
 
-  const syncModeButton = (): void => {
-    if (!modeButton) return;
-    const mode = viewport.getDisplayMode();
-    modeButton.textContent = displayModeLabel(mode);
-    modeButton.setAttribute(
-      "aria-label",
-      `Display mode: ${displayModeLabel(mode)}. Click to cycle.`,
-    );
-    modeButton.dataset.mode = mode;
-  };
-
   const syncFilterButton = (): void => {
     if (!filterButton) return;
     const filter = selection.getFilter();
@@ -95,11 +83,6 @@ function main(): void {
     );
     filterButton.dataset.filter = filter;
   };
-
-  modeButton?.addEventListener("click", () => {
-    viewport.cycleDisplayMode();
-    syncModeButton();
-  });
 
   filterButton?.addEventListener("click", () => {
     selection.cycleFilter();
@@ -116,10 +99,6 @@ function main(): void {
     ) {
       return;
     }
-    if (event.key === "m" || event.key === "M") {
-      viewport.cycleDisplayMode();
-      syncModeButton();
-    }
     if (event.key === "f" || event.key === "F") {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       selection.cycleFilter();
@@ -133,7 +112,6 @@ function main(): void {
     }
   });
 
-  syncModeButton();
   syncFilterButton();
 
   screenConsole?.log(
@@ -141,10 +119,13 @@ function main(): void {
   );
   screenConsole?.log("ids copy to clipboard; measures update in the bottom bar");
   screenConsole?.log(
-    "kernel: SDF field solid · selection: field leaves + creases (mesh is pick accel)",
+    "kernel: SDF field solid · display: GPU sphere-trace (no mesh)",
   );
   screenConsole?.log(
-    "eval: document PartDef → definitionHash cache → field + mesh",
+    "eval: document PartDef → definitionHash cache → field; mesh export-only",
+  );
+  screenConsole?.log(
+    "select: solid/face via field ray · edge/vertex filters need creases (later)",
   );
   screenConsole?.log(
     "build tree (left): construction ops · click row to copy summary",
