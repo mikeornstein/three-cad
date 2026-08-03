@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/**/*.test.ts"
   },
   "repository": {
     "type": "git",
@@ -22,7 +23,9 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "@types/node": "^26.1.2",
     "@types/three": "^0.185.3",
+    "tsx": "^4.23.5",
     "typescript": "^7.0.2",
     "vite": "^8.2.0"
   }

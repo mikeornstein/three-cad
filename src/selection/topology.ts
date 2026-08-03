@@ -17,7 +17,14 @@ import {
   Mesh,
   Vector3,
 } from "three";
-import { fieldNormal, leafAt, type FieldSolid } from "../sdf";
+import {
+  exactFeatures,
+  fieldNormal,
+  leafAt,
+  type ExactEdge,
+  type ExactFeatureSet,
+  type FieldSolid,
+} from "../sdf";
 import {
   makeEntityId,
   makeSolidEntityId,
@@ -52,9 +59,11 @@ const AXIS_FACE_DOT = 0.9;
 export interface TopologyVertex {
   localId: string;
   id: string;
-  /** Index into the mesh position attribute. */
+  /** Index into the mesh position attribute (−1 if exact-only). */
   vertexIndex: number;
   position: Vector3;
+  /** True when position comes from constructive field features. */
+  exact?: boolean;
 }
 
 export interface TopologyEdge {
@@ -69,6 +78,13 @@ export interface TopologyEdge {
   v1: number;
   a: Vector3;
   b: Vector3;
+  /**
+   * Authority length in mm. When set from constructive field source, this is
+   * exact (not polyline-sampled). Prefer this over summing `points`.
+   */
+  length?: number;
+  /** True when a/b/length come from exact field features. */
+  exact?: boolean;
 }
 
 export interface TopologyFace {
@@ -612,9 +628,8 @@ function buildSolidTopology(
     }
   }
 
-  // Feature *chains* = one edge per face-pair (two faces meet).
-  // Prevents MC zigzags from splitting arcs and cube corners from merging edges.
-  const { edges, vertices, edgePositions, segmentToEdge, vertexPositions } =
+  // Feature *chains* = one edge per face-pair (mesh accel for picking).
+  let { edges, vertices, edgePositions, segmentToEdge, vertexPositions } =
     chainFeatureEdgesByFacePair({
       featureKeys,
       edgeMap,
@@ -622,6 +637,19 @@ function buildSolidTopology(
       getWorldPos,
       solidId,
     });
+
+  // Prefer constructive exact features for vertex positions + edge lengths.
+  if (field) {
+    const exact = exactFeatures(field);
+    if (exact && exact.edges.length > 0) {
+      const refined = topologyFromExactFeatures(exact, solidId);
+      edges = refined.edges;
+      vertices = refined.vertices;
+      edgePositions = refined.edgePositions;
+      segmentToEdge = refined.segmentToEdge;
+      vertexPositions = refined.vertexPositions;
+    }
+  }
 
   return {
     solidId,
@@ -639,6 +667,140 @@ function buildSolidTopology(
     edgeByIndex: edges,
     vertexByIndex: vertices,
   };
+}
+
+/**
+ * Build selection edges/vertices directly from exact field features.
+ * Face regions still come from the mesh; pick helpers use exact polylines.
+ */
+function topologyFromExactFeatures(
+  exact: ExactFeatureSet,
+  solidId: string,
+): {
+  edges: TopologyEdge[];
+  vertices: TopologyVertex[];
+  edgePositions: Float32Array;
+  segmentToEdge: Int32Array;
+  vertexPositions: Float32Array;
+} {
+  const vertices: TopologyVertex[] = exact.vertices.map((v, i) => {
+    const localId = `v${i}`;
+    return {
+      localId,
+      id: makeEntityId("vertex", solidId, localId),
+      vertexIndex: -1,
+      position: new Vector3(v.position[0], v.position[1], v.position[2]),
+      exact: true,
+    };
+  });
+
+  const edges: TopologyEdge[] = [];
+  const segmentPairs: {
+    ax: number;
+    ay: number;
+    az: number;
+    bx: number;
+    by: number;
+    bz: number;
+    edgeIndex: number;
+  }[] = [];
+
+  for (const e of exact.edges) {
+    const points = sampleExactEdge(e);
+    if (points.length < 2) continue;
+    const localId = `e${edges.length}`;
+    const edgeIndex = edges.length;
+    edges.push({
+      localId,
+      id: makeEntityId("edge", solidId, localId),
+      path: [],
+      points,
+      v0: -1,
+      v1: -1,
+      a: points[0]!.clone(),
+      b: points[points.length - 1]!.clone(),
+      length: e.length,
+      exact: true,
+    });
+    for (let i = 0; i < points.length - 1; i++) {
+      const A = points[i]!;
+      const B = points[i + 1]!;
+      segmentPairs.push({
+        ax: A.x,
+        ay: A.y,
+        az: A.z,
+        bx: B.x,
+        by: B.y,
+        bz: B.z,
+        edgeIndex,
+      });
+    }
+  }
+
+  const edgePositions = new Float32Array(segmentPairs.length * 6);
+  const segmentToEdge = new Int32Array(segmentPairs.length);
+  segmentPairs.forEach((seg, i) => {
+    const o = i * 6;
+    edgePositions[o] = seg.ax;
+    edgePositions[o + 1] = seg.ay;
+    edgePositions[o + 2] = seg.az;
+    edgePositions[o + 3] = seg.bx;
+    edgePositions[o + 4] = seg.by;
+    edgePositions[o + 5] = seg.bz;
+    segmentToEdge[i] = seg.edgeIndex;
+  });
+
+  const vertexPositions = new Float32Array(vertices.length * 3);
+  vertices.forEach((v, i) => {
+    const o = i * 3;
+    vertexPositions[o] = v.position.x;
+    vertexPositions[o + 1] = v.position.y;
+    vertexPositions[o + 2] = v.position.z;
+  });
+
+  return { edges, vertices, edgePositions, segmentToEdge, vertexPositions };
+}
+
+/** Dense samples for highlight/pick; length stays on ExactEdge. */
+function sampleExactEdge(e: ExactEdge): Vector3[] {
+  if (e.kind === "line") {
+    return [
+      new Vector3(e.a[0], e.a[1], e.a[2]),
+      new Vector3(e.b[0], e.b[1], e.b[2]),
+    ];
+  }
+  const c = new Vector3(e.center[0], e.center[1], e.center[2]);
+  const from = new Vector3(e.a[0], e.a[1], e.a[2]).sub(c);
+  const to = new Vector3(e.b[0], e.b[1], e.b[2]).sub(c);
+  const u = from.clone().normalize();
+  let w = new Vector3().crossVectors(from, to);
+  if (w.lengthSq() < 1e-20) {
+    w =
+      Math.abs(u.x) < 0.9
+        ? new Vector3().crossVectors(u, new Vector3(1, 0, 0))
+        : new Vector3().crossVectors(u, new Vector3(0, 1, 0));
+  }
+  w.normalize();
+  let v = new Vector3().crossVectors(w, u).normalize();
+  // Orient v so sweeping +angle reaches `to`.
+  const toN = to.clone().normalize();
+  if (toN.dot(v) < 0) v.negate();
+
+  const angle = e.angle;
+  const steps = Math.max(8, Math.ceil((angle / (Math.PI / 2)) * 32));
+  const pts: Vector3[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * angle;
+    pts.push(
+      c
+        .clone()
+        .addScaledVector(u, e.radius * Math.cos(t))
+        .addScaledVector(v, e.radius * Math.sin(t)),
+    );
+  }
+  pts[0]!.set(e.a[0], e.a[1], e.a[2]);
+  pts[pts.length - 1]!.set(e.b[0], e.b[1], e.b[2]);
+  return pts;
 }
 
 type EdgeRec = { v0: number; v1: number; tris: number[] };

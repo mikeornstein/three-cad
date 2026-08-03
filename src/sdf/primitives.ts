@@ -34,6 +34,7 @@ export function boxSolid(
   return {
     leafId,
     bounds: aabb(min, max),
+    source: { op: "box", min, max },
     leafAt: leafId ? () => leafId : undefined,
     evaluate(x, y, z) {
       const px = Math.abs(x - cx) - hx;
@@ -59,12 +60,14 @@ export function sphereSolid(
     throw new Error(`sphereSolid: radius must be non-negative, got ${radius}`);
   }
   const [cx, cy, cz] = center;
+  const c: Vec3 = [cx, cy, cz];
   return {
     leafId,
     bounds: aabb(
       [cx - radius, cy - radius, cz - radius],
       [cx + radius, cy + radius, cz + radius],
     ),
+    source: { op: "sphere", center: c, radius },
     leafAt: leafId ? () => leafId : undefined,
     evaluate(x, y, z) {
       return length3(x - cx, y - cy, z - cz) - radius;
@@ -98,6 +101,13 @@ export function cylinderSolid(
       [cx - radius, cy - radius, lo],
       [cx + radius, cy + radius, hi],
     ),
+    source: {
+      op: "cylinder",
+      centerXy: [cx, cy],
+      radius,
+      zMin: lo,
+      zMax: hi,
+    },
     leafAt: leafId ? () => leafId : undefined,
     evaluate(x, y, z) {
       const d = Math.hypot(x - cx, y - cy) - radius;

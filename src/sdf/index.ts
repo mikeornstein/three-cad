@@ -29,3 +29,12 @@ export {
 } from "./ops";
 export { fieldToMesh } from "./mesh/marchingCubes";
 export { fieldGradient, fieldNormal, leafAt } from "./leaf";
+export {
+  exactFeatures,
+  MICRON_MM,
+  nearlyEqual,
+  nearlyEqualVec,
+  type ExactEdge,
+  type ExactFeatureSet,
+  type ExactVertex,
+} from "./exactFeatures";

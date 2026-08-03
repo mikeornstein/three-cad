@@ -78,24 +78,32 @@ function measureSingle(
 
   if (kind === "vertex") {
     const v = solid.vertices[localIndex]!;
+    const fields: MeasureField[] = [
+      field("Position", formatVec3(v.position)),
+    ];
+    if (v.exact) fields.push(field("Geometry", "exact (field source)"));
     return {
       title: `Vertex · ${ref.id}`,
-      fields: [field("Position", formatVec3(v.position))],
+      fields,
       empty: false,
     };
   }
 
   if (kind === "edge") {
     const e = solid.edges[localIndex]!;
-    const length = polylineLength(e.points);
+    // Prefer exact constructive length when present (field source).
+    const length =
+      e.length !== undefined ? e.length : polylineLength(e.points);
     const mid = polylinePointAt(e.points, 0.5);
+    const fields: MeasureField[] = [
+      field("Length", formatMm(length), length),
+      field("Midpoint", formatVec3(mid)),
+      field("Ends", `${formatVec3(e.a)} → ${formatVec3(e.b)}`),
+    ];
+    if (e.exact) fields.push(field("Geometry", "exact (field source)"));
     return {
       title: `Edge · ${ref.id}`,
-      fields: [
-        field("Length", formatMm(length), length),
-        field("Midpoint", formatVec3(mid)),
-        field("Ends", `${formatVec3(e.a)} → ${formatVec3(e.b)}`),
-      ],
+      fields,
       empty: false,
     };
   }
@@ -207,7 +215,9 @@ function measureEdges(
     edges.push(e.solid.edges[e.localIndex]!);
   }
   let totalLen = 0;
-  for (const ed of edges) totalLen += polylineLength(ed.points);
+  for (const ed of edges) {
+    totalLen += ed.length !== undefined ? ed.length : polylineLength(ed.points);
+  }
 
   const fields: MeasureField[] = [
     field("Count", String(edges.length)),
