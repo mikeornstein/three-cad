@@ -2,7 +2,7 @@
   "name": "three-cad",
   "version": "0.1.0",
   "private": true,
-  "description": "Text-first mechanical assembly workbench (Three.js, mesh-first)",
+  "description": "Text-first mechanical assembly workbench (Three.js, SDF / implicit solid kernel)",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -19,7 +19,6 @@
     "url": "https://github.com/mikeornstein/three-cad/issues"
   },
   "dependencies": {
-    "manifold-3d": "^3.5.1",
     "three": "^0.185.1"
   },
   "devDependencies": {

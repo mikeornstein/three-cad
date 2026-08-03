@@ -1,49 +1,76 @@
 # Geometry and validity
 
-This document describes the **mesh-first geometry strategy**, how different **part kinds** map to it, export expectations, and the **validity** system as a first-class product surface.
+This document describes the **SDF / implicit solid kernel** (plan of record), how **part kinds** map to it, export expectations, and the **validity** system as a first-class product surface.
+
+**Decision charter:** [issue #14](https://github.com/mikeornstein/three-cad/issues/14).
 
 ---
 
 ## Geometry strategy
 
-### Mesh-first (near term)
+### Field-first solids (plan of record)
 
-Runtime solids are **meshes**, evaluated from the assembly document.
+Runtime solids are **signed distance / implicit fields** evaluated from the assembly document. Triangle meshes are **derivatives only** (viewport display, temporary picking, STL/3MF/glTF export). They are never the design solid.
 
 | Choice | Rationale |
 |--------|-----------|
-| Mesh solids | Fast iteration, small stack, good enough for assembly visualization |
+| SDF / F-rep solids | Robust CSG, offsets, blends; one math for all part kinds |
 | Millimeters | Real dimensions from day one |
-| Manifold-oriented kernel | Robust booleans; watertight solids as a default goal |
-| Tessellated display in Three.js (or equivalent) | Inspection viewport |
+| Derived meshes | Three.js, export handoff, transitional selection |
+| Tessellated or ray-marched display | Inspection viewport |
 
 **Not in v0:** OpenCascade / B-rep / STEP as the authority. Those remain a later or external manufacturing bridge.
+
+**Retired:** Mesh-first Manifold solids as product direction. No permanent dual kernel (no “Manifold for machined / SDF for AM”).
 
 ### Authority chain
 
 ```text
 Document (intent)
-    → Evaluator (generators + mesh kernel)
-        → Mesh solids (exact-enough for viz / mesh export)
-            → Viewport buffers (disposable)
+    → Evaluator (generators + field kernel)
+        → FieldSolid (authority solid, mm)
+            → Derived mesh / ray march (disposable)
+            → Viewport buffers / export
 ```
 
-Parametric intent lives in the document. Meshes are derived and cacheable.
+Parametric intent lives in the document. Fields (and mesh caches) are derived and cacheable by definition hash.
+
+### Sign convention
+
+```text
+f(p) < 0  inside
+f(p) = 0  surface (isosurface)
+f(p) > 0  outside
+```
+
+True SDFs encode Euclidean distance. Practical CSG (`min` / `max`) often yields **bound fields** (safe lower bounds)—fine for meshing and ray marching, not always correct for naïve uniform offset until redistanced or restricted.
 
 ### Kernel direction
 
-Prefer a library designed for **manifold solid boolean** results (e.g. Manifold / `manifold-3d` class of tools) over ad-hoc triangle CSG that leaves non-manifold junk.
+Implement a **field solid** kernel (TypeScript and/or WASM). Current scaffold: pure TS primitives + CSG ops + marching-cubes meshing under `src/sdf/`.
 
 Requirements on the kernel abstraction:
 
-- Create primitives (box, cylinder, extrude, …)  
+- Create primitives (box, sphere, cylinder, extrude, …)  
 - Boolean union / difference / intersection  
+- Smooth blend / offset (with explicit distance-policy)  
 - Transform  
-- Import triangle soups with clear success/fail (repair optional)  
-- Export triangle data for STL/glTF and for display  
+- Import triangle soups → approximate field (success/fail + quality flags)  
+- Export triangle data for STL/glTF and for display (`toMesh(quality)`)  
 - Run off the main thread when used in interactive hosts (worker)  
+- Optional leaf / material ids for future field-native selection  
 
-Implementation may wrap the kernel so part-kind generators stay testable.
+Implementation wraps the kernel so part-kind generators stay testable.
+
+### Distance policy (accepted constraint)
+
+| Situation | Policy |
+|-----------|--------|
+| True-SDF primitives (box, sphere, …) | Metric distance; offset is trustworthy |
+| After classic CSG (`min`/`max`) | Bound field; ray march/mesh OK; offset may be wrong |
+| Ops that need metric thickness | Redistance, restrict to true-SDF subgraphs, or document approximation |
+
+Do not pretend `min` always preserves Euclidean distance.
 
 ---
 
@@ -53,10 +80,11 @@ Implementation may wrap the kernel so part-kind generators stay testable.
 
 Implications:
 
-- Fillets, blends, and freeform surfaces are **approximated** with sufficient tessellation  
-- Thin sheet bodies have believable gauge thickness  
-- AM / organic parts may be dense meshes  
+- Fillets, blends, and freeform surfaces live as **field ops / document intent**, then tessellate for display  
+- Thin sheet bodies use offset/shell on fields when distance policy allows  
+- AM / organic parts are natural field / lattice generators  
 - Dimensions in the document are real mm values users can measure in the viewport  
+- Display meshing may use marching cubes short-term; dual contouring / feature-aware meshing for sharper mechanical edges later  
 
 Higher surface continuity and exact CAD handoff come later.
 
@@ -64,39 +92,38 @@ Higher surface continuity and exact CAD handoff come later.
 
 ## Part kinds and geometry
 
-Kinds are defined in [document-model.md](./document-model.md). Geometry notes:
+Kinds are defined in [document-model.md](./document-model.md). Generators emit **field graphs**:
 
 ### Generic / machined
 
-- CSG primitives + extrudes + booleans  
+- CSG primitives + extrudes + booleans on fields  
 - Holes, pockets, patterns as features  
-- Fillets / chamfers / blends as mesh approximations of edge treatments  
+- Fillets / chamfers: global smooth-min early; targeted edge blends later  
 - Goal: plates, brackets, housings, fixtures that read as machined  
 
 ### Formed sheet metal
 
-- Thin solid (offset shell or solid of gauge thickness) from profile + bend metadata  
+- Thin solid via offset / shell from profile + bend metadata  
 - Near term: **visual** bent form; flat-pattern unfold is later  
 - Checks later: gauge consistency, min flange length (kind-specific)  
 
 ### Injection molded
 
-- Shell-like bodies, ribs, bosses, generous fillets  
-- Outer skins may come from smoother generators or imported freeform  
+- Shell-like bodies, ribs, bosses, generous blends as field ops  
+- Outer skins may come from smoother generators or imported freeform → field  
 - Checks later: crude draft heuristics (optional), thickness  
 
 ### Topology-optimized / AM
 
-- Often **imported** dense meshes from external optimizers  
-- Or procedural generators (lattices, smoothed density fields)—phased  
-- Preserve manifoldness when possible; otherwise display + warn  
-- Checks: thickness for printability hygiene, watertight  
+- Lattices / density fields as native generators  
+- Or import mesh → field promotion  
+- Checks: thickness for printability hygiene, watertight export  
 
 ### Imported vendor
 
 - STL / OBJ / glTF as assets  
-- Promote to Manifold solid when topology allows  
-- Otherwise: display mesh, limited booleans, explicit validity warnings  
+- Promote to approximate field solid  
+- Record quality flags; limited ops until field quality is known  
 
 **Shared across kinds:** isolatable, measurable, exportable, checkable, addressable by id for language-driven edits.
 
@@ -106,12 +133,13 @@ Kinds are defined in [document-model.md](./document-model.md). Geometry notes:
 
 ```text
 definitionHash = hash(kind, generator, version, payload, assetHashes)
-mesh = cache.get(definitionHash) ?? buildAndStore(definitionHash)
+field = cache.get(definitionHash) ?? buildAndStore(definitionHash)
+displayMesh = meshCache.get(definitionHash, quality) ?? fieldToMesh(field, quality)
 ```
 
-- Instances only apply transforms; they do not duplicate part meshes.  
+- Instances only apply transforms; they do not duplicate part fields.  
 - Assembly-level meshes for export may bake transforms.  
-- Changing tessellation quality settings should be part of the hash or a separate display derivative so “export quality” is intentional.
+- Tessellation quality is part of the mesh cache key, not the field identity.  
 
 ---
 
@@ -121,16 +149,16 @@ mesh = cache.get(definitionHash) ?? buildAndStore(definitionHash)
 
 | Format | Role |
 |--------|------|
-| STL | Common vendor / print mesh |
-| OBJ | Simple mesh exchange |
+| STL | Common vendor / print mesh → approximate field |
+| OBJ | Simple mesh exchange → field |
 | glTF / GLB | Structured mesh + nodes when useful |
 
 Import pipeline:
 
 1. Decode → triangle mesh  
-2. Attempt solid/manifold promotion  
-3. Record asset hash + flags (`manifold: true/false`, `repaired: …`)  
-4. Part kind `imported` references asset  
+2. Build approximate signed field (BVH distance / voxel / hierarchical)  
+3. Record asset hash + flags (`fieldQuality`, `repaired`, …)  
+4. Part kind `imported` references asset + field derivative  
 
 ### Export
 
@@ -150,6 +178,28 @@ Export and checks accept a scope:
 - Single instance  
 - Subassembly (instance subtree)  
 - Whole assembly  
+
+---
+
+## Selection and measurement (migration)
+
+**Plan of record** is field-native identity, not triangle adjacency:
+
+| Kind | Field-native idea |
+|------|-------------------|
+| Solid | Instance / part field root |
+| Face / region | CSG leaf id, material id, or multi-label face fields |
+| Edge | Sharp crease (∇f discontinuity) or multi-label junction |
+| Vertex | Multi-edge / multi-face junction samples |
+
+**Current codebase:** mesh topology pick/measure remains as **migration debt** so the scaffold stays usable while the kernel lands. It will be redesigned (selection v2, measure v2)—not treated as long-term authority.
+
+Authority measurements (target):
+
+- Point ↔ surface via \|f\| / projection along ∇f  
+- Clearance / interference via field samples or instance CSG  
+- Bbox from primitive bounds or sampled bounds  
+- Diameter / circular features: document-declared or detected—not “triangle soup ≈ circle” as truth  
 
 ---
 
@@ -177,18 +227,18 @@ Text channel prints human-readable summaries; viewport consumes hotspots.
 
 ### Core checks
 
-| Check | Meaning | Mesh approach (direction) |
-|-------|---------|---------------------------|
-| **Watertight / manifold** | Closed solid, consistent topology | Kernel manifold status + topology audit |
-| **Min thickness** | No region thinner than threshold | Sampling / ray pairs / local thickness estimates; report min and hotspots |
-| **Interference** | Unwanted solid overlap between instances | Broadphase then boolean intersection volume > ε |
-| **Surface quality** | Mesh hygiene for credible solids | Triangle aspect ratio, degenerates, normal consistency; later curvature proxies |
+| Check | Meaning | Field approach (direction) |
+|-------|---------|----------------------------|
+| **Watertight / solid** | Closed solid, consistent export | Well-formed field + manifold-ish meshing policy on export |
+| **Min thickness** | No region thinner than threshold | Interior distance sampling / medial-ish probes on \(f\) |
+| **Interference** | Unwanted solid overlap between instances | Field CSG of instances or dense sampling + hotspots |
+| **Surface quality** | Display/export hygiene | Gradient health, crease noise, mesh derivative metrics |
 
 ### Assembly vs part
 
 | Scope | Typical checks |
 |-------|----------------|
-| Part | Watertight, min thickness, surface quality |
+| Part | Solid/export policy, min thickness, surface quality |
 | Assembly | Interference (+ optional clearance later), aggregate policy |
 
 ### Kind-specific checks (extensible)
@@ -201,24 +251,11 @@ Attach without breaking the core report schema, e.g.:
 
 ### Honesty
 
-Mesh-based thickness and surface metrics are **design hygiene**, not certified manufacturing validation. Document thresholds in UX copy accordingly. False positives/negatives are expected; hotspots help humans judge.
+Field-based thickness and surface metrics are **design hygiene**, not certified manufacturing validation. Document thresholds in UX copy accordingly. False positives/negatives are expected; hotspots help humans judge.
 
 ### Policy
 
 Defaults live in the document (`checkPolicy`). Commands may override for a one-shot run. “Set minimum thickness policy to 1.5 mm” is a DocumentOp.
-
----
-
-## Measurement
-
-Viewport and text channel should share measurement semantics:
-
-- Distance between points / features  
-- Bounding box sizes  
-- Simple diameters from circular edge approximations when available  
-- Always in mm internally; format for display  
-
-Measurements are read-only unless the user commits a change derived from them (“move until gap is 2 mm” → transform op).
 
 ---
 
@@ -231,12 +268,12 @@ Users will want real **smooth** mechanical character:
 - Molded continuous skins  
 - AM organic surfaces  
 
-Near-term strategy:
+Strategy:
 
 1. Store smooth intent in the document (radii, blend targets, freeform refs).  
-2. Tessellate credibly for display and mesh export.  
-3. Improve tessellation quality and generators over time.  
-4. Optionally add a B-rep/STEP path later for external manufacturing without rewriting the document model—generators gain a second backend.
+2. Evaluate as field ops where possible.  
+3. Tessellate credibly for display and mesh export (improve mesher over time).  
+4. Optionally add a B-rep/STEP path later for external manufacturing without rewriting the document model.  
 
 Do not block assembly workflow on exact curvature.
 
@@ -244,10 +281,11 @@ Do not block assembly workflow on exact curvature.
 
 ## Performance notes
 
-- Evaluate in a worker; keep the viewport responsive.  
-- Cache by definition hash.  
+- Evaluate fields in a worker; keep the viewport responsive.  
+- Cache fields by definition hash; cache meshes by (hash, quality).  
 - Rebuild only dirty parts when ops land.  
-- Progressive quality (coarse while dragging UI, fine on commit) is allowed as a host optimization if hashes distinguish quality or display meshes are separate from export meshes.
+- Progressive quality (coarse while dragging UI, fine on commit) is allowed.  
+- Ray-marched display mode is optional; tessellation remains valid for picking/perf.  
 
 ---
 
@@ -257,3 +295,4 @@ Do not block assembly workflow on exact curvature.
 - [Document model](./document-model.md)  
 - [Interface evolution](./interface-evolution.md)  
 - [Roadmap](./roadmap.md)  
+- Epic: [issue #14](https://github.com/mikeornstein/three-cad/issues/14)  

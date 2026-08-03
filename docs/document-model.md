@@ -1,6 +1,6 @@
 # Document model
 
-The **assembly document** is the durable source of truth for design intent. Geometry, meshes, and viewport state are derived from it.
+The **assembly document** is the durable source of truth for design intent. Field solids, derived meshes, and viewport state are derived from it.
 
 Goals for the model:
 
@@ -65,14 +65,14 @@ Kinds express **manufacturing-shaped intent**, not full process simulation. They
 | `machined` | Prismatic / milled / turned feel | Features: extrude, bore, pocket, fillet, chamfer, pattern |
 | `sheet` | Formed sheet metal | Gauge, sketch/profile, bends, flanges, reliefs |
 | `molded` | Injection-molded-like solid | Shells, ribs, bosses, fillets, outer skin |
-| `am` | Additive / topology-optimized | Freeform mesh or procedural organic/lattice definition |
-| `imported` | Vendor or external mesh | `meshRef` → asset; optional repair flags |
+| `am` | Additive / topology-optimized | Lattice / density / freeform field definition (or import → field) |
+| `imported` | Vendor or external mesh | `meshRef` → asset → approximate field; quality flags |
 
 **Rules:**
 
 - Kinds are first-class from day one of the schema, even if early generators only implement `generic` + `imported`.  
 - A part has exactly one primary kind; mixed-process assemblies use multiple parts.  
-- Smooth features (fillets, blends, freeform) live as **intent in the document**; the evaluator produces mesh approximations.
+- Smooth features (fillets, blends, freeform) live as **intent in the document**; the evaluator produces field ops and mesh derivatives for display/export.
 
 ### Parametric vs imported
 

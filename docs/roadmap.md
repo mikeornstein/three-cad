@@ -2,11 +2,13 @@
 
 Phased plan for three-cad. Architecture and product principles live in the other docs; this file sequences delivery and records open questions.
 
+**Kernel plan of record:** SDF / implicit field solids ([issue #14](https://github.com/mikeornstein/three-cad/issues/14)). Meshes are derivatives only.
+
 ---
 
 ## North star
 
-A **text-first** mechanical assembly workbench: plain language in, mesh assemblies out, viewport for inspect/measure/select, first-class validity, isolatable components, shareable idempotent documents—and room to grow part kinds (machined, sheet, molded, AM, imported) and UI affordances without rewriting the core.
+A **text-first** mechanical assembly workbench: plain language in, **field-evaluated** assemblies out, viewport for inspect/measure/select, first-class validity, isolatable components, shareable idempotent documents—and room to grow part kinds (machined, sheet, molded, AM, imported) and UI affordances without rewriting the core.
 
 ---
 
@@ -16,10 +18,10 @@ A **text-first** mechanical assembly workbench: plain language in, mesh assembli
 
 | Deliverable | Status |
 |-------------|--------|
-| [architecture.md](./architecture.md) | Written |
+| [architecture.md](./architecture.md) | Written (updated for SDF) |
 | [document-model.md](./document-model.md) | Written |
 | [interface-evolution.md](./interface-evolution.md) | Written |
-| [geometry-and-validity.md](./geometry-and-validity.md) | Written |
+| [geometry-and-validity.md](./geometry-and-validity.md) | Written (SDF plan of record) |
 | [roadmap.md](./roadmap.md) | Written |
 | Root [README.md](../README.md) | Product summary + links |
 
@@ -29,29 +31,33 @@ A **text-first** mechanical assembly workbench: plain language in, mesh assembli
 
 ## Phase 1 — Vertical slice (in progress)
 
-**Goal:** Prove the loop end-to-end with minimal generators.
+**Goal:** Prove the loop end-to-end with field solids and minimal generators.
 
 **Scaffold done:**
 
 - [x] Vite + TypeScript + Three.js host  
 - [x] Viewport: orbit / pan / zoom, mm grid, **Z-up**  
-- [x] Demo solid via Manifold (throwaway cube ∪ sphere — not full evaluator)  
+- [x] SDF kernel scaffold (`src/sdf/`): primitives, CSG, marching-cubes mesh  
+- [x] Demo solid via SDF (cube ∪ sphere in mm — not full evaluator)  
+- [x] Manifold dependency removed from product path  
+- [x] Mesh-era selection + measure bar (migration debt; rebuild under #14)  
 
-**Still to do:**
+**Still to do (re-aimed for fields):**
 
-- Mesh evaluator skeleton (manifold-oriented kernel + worker)  
+- Field evaluator skeleton (worker + cache by definition hash)  
 - Minimal assembly document load/save  
 - Structured ops for create part / instance / transform  
 - Thin plain-language or text-command mapping into those ops  
-- Viewport: basic part pick (view already present)  
-- STL import + export (part and assembly)  
-- Core checks: manifold/watertight, interference, crude min thickness  
+- **Selection v2** — field-native identity (leaf ids / creases); drop mesh topology as authority  
+- **Measure v2** — field distance, bbox, interference-oriented queries  
+- Mesh import → approximate field + STL export from field meshing  
+- Core checks on fields: solid/export policy, interference, min thickness  
 
 **Success criteria:**
 
-- [ ] Describe a small assembly via text; see it in mm in the viewport  
-- [ ] Import a vendor STL; place it; detect interference  
-- [ ] Export isolatable part STL  
+- [ ] Describe a small assembly via text; see **field-evaluated** geometry in mm in the viewport  
+- [ ] Import a vendor mesh → field; place it; detect interference  
+- [ ] Export isolatable part STL from field meshing  
 - [ ] Reload document → same geometry (idempotent rebuild)  
 - [ ] Validity report surfaces a failure clearly  
 
@@ -59,38 +65,39 @@ A **text-first** mechanical assembly workbench: plain language in, mesh assembli
 
 ## Phase 2 — Assembly speed + selection-driven edits
 
-**Goal:** Make multi-part work fast and make “that edge/face” addressable.
+**Goal:** Make multi-part work fast and make “that edge/face” addressable **on fields**.
 
 - Instance tree, hide, isolate, explode  
-- Selection context fed into interpreter  
+- Field-native selection context fed into interpreter  
 - First UIRequest capabilities: `pick.part`, `pick.face` / region, maybe `pick.edge`  
-- Content-hash mesh cache  
+- Content-hash field + mesh caches  
 - Shareable package layout (document + assets by hash)  
-- Measure distance in viewport + text  
+- Measure distance in viewport + text (field queries)  
 
 **Success criteria:**
 
 - [ ] Isolate any instance in one command or click+command  
-- [ ] Complete at least one edit that required a picker (e.g. feature on selected face)  
+- [ ] Complete at least one edit that required a picker (e.g. feature on selected face/region)  
 - [ ] Unchanged parts do not rebuild on unrelated ops  
 
 ---
 
 ## Phase 3 — Part-class depth
 
-**Goal:** Move beyond generic boxes toward process-shaped geometry.
+**Goal:** Move beyond generic boxes toward process-shaped field generators.
 
-- Machined feature depth: holes, pockets, patterns, fillet/chamfer as document features with credible mesh  
-- Sheet kind: gauge + simple bent solid from profile (visual)  
+- Machined feature depth: holes, pockets, patterns, fillet/chamfer as document features with field ops  
+- Sheet kind: gauge + simple bent solid via offset (visual)  
 - Molded kind: shell/rib/boss oriented generators (even if simple)  
-- AM kind: robust import path for dense meshes + thickness hygiene  
+- AM kind: lattices / dense freeform as native fields + thickness hygiene  
 - Better surface-quality metrics and hotspot UX  
 - Kind-specific check hooks  
+- Improve mesher (dual contouring / feature-aware) for sharper mechanical export  
 
 **Success criteria:**
 
 - [ ] Demo assembly mixes at least three kinds (e.g. machined + imported + sheet or AM)  
-- [ ] Smooth-ish fillets/blends read as intentional, not accidental faceting only  
+- [ ] Smooth-ish fillets/blends read as intentional  
 - [ ] Checks run per kind without special-case host code  
 
 ---
@@ -123,23 +130,25 @@ A **text-first** mechanical assembly workbench: plain language in, mesh assembli
 
 **Success criteria:**
 
-- [ ] A part definition can produce mesh today and higher-fidelity export later without a full redesign of the document  
+- [ ] A part definition can produce field + mesh today and higher-fidelity export later without a full redesign of the document  
 - [ ] Downstream traditional CAD or AI CAD can use outputs as reference with clear expectations  
 
 ---
 
-## Suggested implementation order (after Phase 0)
+## Suggested implementation order (after SDF charter #14)
 
 1. ~~Viewport scaffold (mm, Z-up, demo solid)~~ ✅  
-2. Document schema stub + in-memory store  
-3. Evaluator + kernel wrapper + cache  
-4. Viewport binding to evaluated scene  
-5. Structured command → ops → evaluate → view  
-6. Import/export STL  
-7. Validity module  
-8. Selection + first UIRequest  
-9. NL sugar on top of ops  
-10. Broader generators / kinds  
+2. ~~SDF kernel + demo; remove Manifold~~ ✅ (initial)  
+3. Docs aligned to field-first ✅ (this track)  
+4. Selection v2 + measure v2 (field-native)  
+5. Document schema stub + in-memory store  
+6. Evaluator + worker + cache  
+7. Viewport binding to evaluated scene  
+8. Structured command → ops → evaluate → view  
+9. Import mesh→field / export STL from field  
+10. Validity module (field sampling)  
+11. NL sugar on top of ops  
+12. Broader generators / kinds  
 
 ---
 
@@ -152,7 +161,8 @@ A **text-first** mechanical assembly workbench: plain language in, mesh assembli
 | Kind priority | `generic`/`machined` + `imported` first; sheet/molded/am specified early, built in Phase 3 |
 | Units | mm internal only |
 | Transform convention | **Z-up**, right-handed (decided with first viewport) |
-| Kernel class | Manifold-oriented mesh solids |
+| Kernel class | **SDF / implicit field solids** (plan of record) |
+| Mesh role | Derivative only (display, export, transitional picking) |
 | Export | STL first; glTF for structure; 3MF when needed |
 
 ---
@@ -164,7 +174,10 @@ A **text-first** mechanical assembly workbench: plain language in, mesh assembli
 3. **History in file:** always store op log, optional, or external only?  
 4. **Subassemblies:** instance parent tree only, or nested documents?  
 5. **When to invest in sheet flat pattern** vs visual bent form only?  
-6. **Repair policy for bad STLs:** auto-repair silent vs always warn?  
+6. **Repair / field-quality policy for bad STLs:** auto-approx silent vs always warn?  
+7. **Display:** ray-march mode vs always tessellate for picking?  
+8. **Mesher:** dual contouring timeline for sharp mechanical edges?  
+9. **WASM:** stay pure TS longer, or port libfive-class F-rep?  
 
 Record decisions here when made.
 
@@ -177,7 +190,8 @@ Record decisions here when made.
 - FEA, CAM, mold flow  
 - Multiplayer  
 - B-rep as v0 dependency  
-- Certified manufacturing sign-off from mesh checks  
+- Permanent dual solid kernels  
+- Certified manufacturing sign-off from field/mesh heuristics alone  
 
 ---
 

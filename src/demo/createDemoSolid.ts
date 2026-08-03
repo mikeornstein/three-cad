@@ -1,21 +1,16 @@
 /**
- * Throwaway demo solid for the Phase 1 viewport scaffold.
- * Not the real evaluator — Manifold is used here only to prove the WASM path
- * and show a real-scale boolean in mm.
+ * Scaffold demo solid — proves the SDF kernel path (mm, Z-up).
+ * Not the full document evaluator; replaces the retired Manifold demo (#14).
  *
  * Geometry:
  * - Cube 100×100×100 mm, corner at origin → [0, 100]³
  * - Sphere diameter 100 mm (radius 50 mm), center at +X/+Y/+Z vertex (100,100,100)
- * - Union → single manifold mesh
+ * - Union → single field solid, tessellated for the viewport
  *
- * Shading note: Manifold returns a *welded* mesh (shared verts at edges).
- * Smooth `computeVertexNormals()` averages face normals at those verts and
- * makes flat cube faces look puffy/lumpy. We use flatShading so planar faces
- * read as true planes (CAD-style).
+ * Shading: flatShading so planar regions read as CAD-style planes.
+ * (Welded MC verts + smooth normals would look lumpy on the cube.)
  */
 
-import Module from "manifold-3d";
-import wasmUrl from "manifold-3d/manifold.wasm?url";
 import {
   BufferAttribute,
   BufferGeometry,
@@ -23,74 +18,59 @@ import {
   Mesh,
   MeshStandardMaterial,
 } from "three";
+import {
+  boxSolid,
+  fieldToMesh,
+  sphereSolid,
+  union,
+  type FieldSolid,
+} from "../sdf";
 
 const CUBE_MM = 100;
-/** Diameter of the demo sphere in mm (radius = 50). */
 const SPHERE_DIAMETER_MM = 100;
 const SPHERE_RADIUS_MM = SPHERE_DIAMETER_MM / 2;
-const CORNER: [number, number, number] = [CUBE_MM, CUBE_MM, CUBE_MM];
-/** Geodesic segments for the sphere (higher = smoother). */
-const SPHERE_SEGMENTS = 64;
+const CORNER = [CUBE_MM, CUBE_MM, CUBE_MM] as const;
 
-export async function createDemoSolid(): Promise<Mesh> {
-  const wasm = await Module({
-    locateFile: (path: string) => (path.endsWith(".wasm") ? wasmUrl : path),
-  });
-  wasm.setup();
-  const { Manifold } = wasm;
+/** Display tessellation cell size (mm). Export can use a finer value later. */
+const DISPLAY_CELL_MM = 1.5;
 
-  // Manifold cube defaults to first octant touching the origin (center=false).
-  const cube = Manifold.cube([CUBE_MM, CUBE_MM, CUBE_MM], false);
-  const sphere = Manifold.sphere(SPHERE_RADIUS_MM, SPHERE_SEGMENTS).translate(
-    CORNER,
-  );
-  const solid = cube.add(sphere);
-
-  try {
-    const mesh = solid.getMesh();
-    const geometry = manifoldMeshToGeometry(mesh);
-    const material = new MeshStandardMaterial({
-      color: 0x6e9fd4,
-      metalness: 0.12,
-      roughness: 0.5,
-      side: DoubleSide,
-      // Critical: welded Manifold meshes look "lumpy" with smooth normals.
-      flatShading: true,
-    });
-    const threeMesh = new Mesh(geometry, material);
-    threeMesh.name = "demo-cube-sphere-union";
-    return threeMesh;
-  } finally {
-    solid.delete();
-    sphere.delete();
-    cube.delete();
-  }
+/** Build the demo field solid (authority representation). */
+export function createDemoFieldSolid(): FieldSolid {
+  const cube = boxSolid([0, 0, 0], [CUBE_MM, CUBE_MM, CUBE_MM], "demo-cube");
+  const sphere = sphereSolid(CORNER, SPHERE_RADIUS_MM, "demo-sphere");
+  return union(cube, sphere, "demo-union");
 }
 
-function manifoldMeshToGeometry(mesh: {
-  numProp: number;
-  numVert: number;
-  vertProperties: Float32Array;
-  triVerts: Uint32Array;
-}): BufferGeometry {
-  const { numProp, numVert, vertProperties, triVerts } = mesh;
-  const positions = new Float32Array(numVert * 3);
-
-  for (let i = 0; i < numVert; i++) {
-    const src = i * numProp;
-    const dst = i * 3;
-    positions[dst] = vertProperties[src]!;
-    positions[dst + 1] = vertProperties[src + 1]!;
-    positions[dst + 2] = vertProperties[src + 2]!;
-  }
+/**
+ * Tessellate the demo field for Three.js.
+ * Mesh is a derivative — keep the field if callers need measure/validity later.
+ */
+export function createDemoSolid(): Mesh {
+  const field = createDemoFieldSolid();
+  const meshData = fieldToMesh(field, { cellSizeMm: DISPLAY_CELL_MM });
 
   const geometry = new BufferGeometry();
-  geometry.setAttribute("position", new BufferAttribute(positions, 3));
-  geometry.setIndex(new BufferAttribute(triVerts.slice(), 1));
-  // Still useful for lighting when flatShading is off; with flatShading
-  // Three.js derives per-face normals at draw time.
+  geometry.setAttribute(
+    "position",
+    new BufferAttribute(meshData.positions, 3),
+  );
+  geometry.setIndex(new BufferAttribute(meshData.indices, 1));
   geometry.computeVertexNormals();
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
-  return geometry;
+
+  const material = new MeshStandardMaterial({
+    color: 0x6e9fd4,
+    metalness: 0.12,
+    roughness: 0.5,
+    side: DoubleSide,
+    flatShading: true,
+  });
+
+  const threeMesh = new Mesh(geometry, material);
+  threeMesh.name = "demo-cube-sphere-union";
+  // Stash field for future selection/measure work (non-enumerable-ish via userData).
+  threeMesh.userData.fieldSolid = field;
+  threeMesh.userData.cellSizeMm = DISPLAY_CELL_MM;
+  return threeMesh;
 }

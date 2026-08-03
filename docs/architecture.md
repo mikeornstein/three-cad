@@ -4,18 +4,20 @@
 
 **three-cad is a text-first mechanical assembly workbench**, not a traditional CAD application.
 
-Users describe mechanical assemblies in plain language (and structured intent). The system interprets that intent into a durable document, evaluates **visually credible mesh geometry**, and exposes a viewport for **inspection, measurement, and selecting features** that need further adjustment. Geometric validity—watertight solids, interference, minimum thickness, surface hygiene—is a first-class product surface, not an afterthought.
+Users describe mechanical assemblies in plain language (and structured intent). The system interprets that intent into a durable document, evaluates **visually credible geometry from an SDF / implicit solid kernel**, and exposes a viewport for **inspection, measurement, and selecting features** that need further adjustment. Geometric validity—solid integrity, interference, minimum thickness, surface hygiene—is a first-class product surface, not an afterthought.
 
 | Is | Is not |
 |----|--------|
 | Plain-language and structured **intent in** | Sketch / feature / gizmo CAD as the primary UI |
 | Viewport for **inspect, measure, select/call-out** | Freehand modeling surface |
-| **Mesh-first** visually credible geometry (near term) | B-rep manufacturing kernel as a v0 requirement |
+| **SDF / field-first** solids; meshes are derivatives | Mesh or B-rep as solid authority |
 | **Validity checks** as core product behavior | Render-only sandbox |
 | **Evolving interface**—interpreter may open new affordances | A frozen CLI grammar as the product identity |
 | Assemblies of **real part classes** (machined, sheet, molded, AM, imported) | Forever limited to boxes and cylinders |
 
 Manufacturing-grade exact solids (STEP/B-rep) and full process simulation live **later or outside** this tool. Downstream humans or AI designers may use traditional CAD with our mesh export as reference.
+
+**Kernel decision:** [issue #14](https://github.com/mikeornstein/three-cad/issues/14) — SDF / implicit is plan of record; mesh-first Manifold direction is retired.
 
 ---
 
@@ -26,7 +28,7 @@ plain language (or structured intent)
         ↓
 interpreter → document ops + optional UI requests
         ↓
-geometry evaluation (mesh) + validity reports
+geometry evaluation (field solid) + validity reports
         ↓
 viewport inspect / measure / select features
         ↓
@@ -64,10 +66,15 @@ Everything that permanently changes the design must land as **durable operations
 ┌───────────────────────────┐                     │
 │ Evaluator                 │                     │
 │  generators by part kind  │                     │
-│  mesh kernel              │                     │
+│  SDF / field kernel       │                     │
 │  cache by content hash    │                     │
 └─────────────┬─────────────┘                     │
               ├──────────────► Validity Engine    │
+              ▼                                   │
+┌───────────────────────────┐                     │
+│ Derived mesh / ray march  │                     │
+│  display · export · pick  │                     │
+└─────────────┬─────────────┘                     │
               ▼                                   │
 ┌───────────────────────────┐                     │
 │ Scene / Viewport          │◄────────────────────┘
@@ -75,7 +82,7 @@ Everything that permanently changes the design must land as **durable operations
 │  highlight check hotspots │
 └─────────────┬─────────────┘
               ▼
-         Export (STL / 3MF / glTF)
+         Export (STL / 3MF / glTF)  ← mesh derivatives
 ```
 
 ### Stable core vs evolvable surface
@@ -84,11 +91,12 @@ Everything that permanently changes the design must land as **durable operations
 |---------------------------|-------------------------------|
 | Assembly document model | CLI / text grammar |
 | Document operations | Agent prompts and NL phrasing |
-| Geometry evaluation contract | Widgets and task-specific UI |
+| Geometry evaluation contract (field solids) | Widgets and task-specific UI |
 | Validity report shape | How results are presented |
 | Units and identity rules | Host shell (web, terminal, etc.) |
+| | Selection/measure implementation (field-native rebuild) |
 
-**Stable core = document + ops + geometry + checks.**  
+**Stable core = document + ops + field geometry + checks.**  
 **Unstable surface = language surface, widgets, prompts.**
 
 This split is deliberate: users will keep inventing better ways to express edits. New interfaces must not require rewriting the meaning of an assembly.
@@ -109,7 +117,7 @@ Turns intent into:
 2. **UIRequests** — ask the host to open a registered capability (edge picker, thickness field, …)  
 3. **Questions** — clarifications when intent is ambiguous  
 
-The interpreter does not own geometry. It plans and commits; the evaluator builds meshes.
+The interpreter does not own geometry. It plans and commits; the evaluator builds field solids.
 
 See [interface-evolution.md](./interface-evolution.md).
 
@@ -121,11 +129,11 @@ See [document-model.md](./document-model.md).
 
 ### Evaluator
 
-Maps part definitions to meshes (and instance transforms to a scene graph). Uses a mesh solid kernel suitable for robust booleans and manifold solids. Caches by content hash so unchanged parts are not rebuilt.
+Maps part definitions to **field solids** (and instance transforms to a scene graph). Uses the SDF / implicit kernel for booleans, offsets, blends, and primitives. Caches by content hash so unchanged parts are not rebuilt. Produces mesh derivatives on demand for display and export.
 
 ### Validity engine
 
-Produces structured reports for parts and assemblies: watertight/manifold, min thickness, interference, surface quality, plus extensible kind-specific checks. Hotspots feed viewport highlighting.
+Produces structured reports for parts and assemblies: solid/export policy, min thickness, interference, surface quality, plus extensible kind-specific checks. Prefer field sampling where natural. Hotspots feed viewport highlighting.
 
 See [geometry-and-validity.md](./geometry-and-validity.md).
 
@@ -142,11 +150,11 @@ Read-mostly inspection surface:
 - Select parts / regions / features so language can refer to them  
 - Highlight validity failures  
 
-No freehand solid modeling tools as the primary path.
+No freehand solid modeling tools as the primary path. Display may tessellate fields or ray-march; solid authority remains the field.
 
 ### Export
 
-Mesh formats (STL, 3MF, glTF/GLB) for isolatable components and whole assemblies. Low-friction handoff to humans, AI, and traditional tools as **reference geometry**. Exact CAD interchange is a later concern.
+Mesh formats (STL, 3MF, glTF/GLB) for isolatable components and whole assemblies—**always from field meshing** (or equivalent derivative), not from a separate mesh solid model. Low-friction handoff to humans, AI, and traditional tools as **reference geometry**. Exact CAD interchange is a later concern.
 
 ---
 
@@ -156,11 +164,12 @@ Mesh formats (STL, 3MF, glTF/GLB) for isolatable components and whole assemblies
 
 Plain language is the default input. The interpreter may open new UI surfaces when text is a poor fit for spatial or multi-value edits. Those surfaces resolve parameters and selections; they do not become a parallel source of truth.
 
-### 2. Mesh-first now; manufacturing fidelity later
+### 2. Field-first solids; manufacturing fidelity later
 
-- Runtime: mesh solids with real **millimeter** dimensions  
-- Export: mesh as reference  
+- Runtime: SDF / implicit solids with real **millimeter** dimensions  
+- Display/export: mesh derivatives as reference  
 - Exact B-rep / STEP: future or external  
+- **One solid math** — part kinds differ by generators and checks, not by kernel  
 
 ### 3. Part classes span real processes
 
@@ -169,10 +178,10 @@ The document and generator architecture treat these as first-class **kinds**, no
 - Machined (fillets, blends, bores, pockets, patterns)  
 - Formed sheet metal (gauge, bends, flanges)  
 - Injection molded (shells, ribs, bosses, complex skins)  
-- Topology-optimized / AM (organic solids, dense freeform)  
+- Topology-optimized / AM (organic solids, lattices)  
 - Imported vendor geometry  
 
-v0 does not implement full process DFM. It **must not** hard-code a world where only CSG boxes exist. Smooth features are mesh approximations first.
+v0 does not implement full process DFM. It **must not** hard-code a world where only CSG boxes exist.
 
 ### 4. Validity is product, not a QA script
 
@@ -191,10 +200,11 @@ Create and evaluate paths always can return structured validity. Failure is visi
 
 - Full SolidWorks / Onshape / Fusion clone  
 - B-rep kernel as a v0 dependency  
+- Permanent dual mesh+SDF solid kernels  
 - Frozen CLI as the product identity  
 - Process simulation (mold flow, FEA, CAM toolpaths)  
 - Multiplayer collaboration  
-- Certified manufacturing validation from mesh heuristics alone  
+- Certified manufacturing validation from field heuristics alone  
 
 ---
 
