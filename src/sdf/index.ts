@@ -35,11 +35,37 @@ export {
   MICRON_MM,
   measureEdgeOnField,
   measurePlanarFaceFromField,
+  measureSurfaceFromField,
   nearlyEqual,
   nearlyEqualVec,
+  planarFaceFrameFromField,
   projectPointOnField,
   projectToCrease,
   projectToSurface,
   type EdgeMeasure,
+  type PlanarFaceFrame,
   type PlanarFaceMeasure,
+  type SurfaceMeasure,
+  type SurfaceMeasureOpts,
 } from "./fieldMeasure";
+export {
+  axisFaceBin,
+  edgeness,
+  EDGENESS_MIN,
+  featureScore,
+  FEATURE_MIN,
+  pairDihedral,
+  planeBasis,
+} from "./fieldFeatures";
+export {
+  densifyRegionForHighlight,
+  growSurfaceRegion,
+  nudgeOffCrease,
+  type GrowSurfaceRegionOpts,
+  type SurfaceRegion,
+} from "./fieldRegion";
+export {
+  classifyCreaseFeature,
+  type FieldEdgeHit,
+  type FieldVertexHit,
+} from "./fieldEdgeVertex";

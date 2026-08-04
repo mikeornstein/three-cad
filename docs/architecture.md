@@ -72,8 +72,8 @@ Everything that permanently changes the design must land as **durable operations
               ├──────────────► Validity Engine    │
               ▼                                   │
 ┌───────────────────────────┐                     │
-│ Derived mesh / ray march  │                     │
-│  display · export · pick  │                     │
+│ GPU sphere-trace display  │                     │
+│  FieldNode → GLSL · pick  │                     │
 └─────────────┬─────────────┘                     │
               ▼                                   │
 ┌───────────────────────────┐                     │
@@ -82,7 +82,7 @@ Everything that permanently changes the design must land as **durable operations
 │  highlight check hotspots │
 └─────────────┬─────────────┘
               ▼
-         Export (STL / 3MF / glTF)  ← mesh derivatives
+         Export (STL / 3MF / glTF)  ← mesh derivatives only
 ```
 
 ### Stable core vs evolvable surface
@@ -129,7 +129,7 @@ See [document-model.md](./document-model.md).
 
 ### Evaluator
 
-Maps part definitions to **field solids** (and instance transforms to a scene graph). Uses the SDF / implicit kernel for booleans, offsets, blends, and primitives. Caches by content hash so unchanged parts are not rebuilt. Produces mesh derivatives on demand for display and export.
+Maps part definitions to **field solids** (and instance transforms to a scene graph). Uses the SDF / implicit kernel for booleans, offsets, blends, and primitives. Caches by content hash so unchanged parts are not rebuilt. Produces mesh derivatives **on demand for export only**; the viewport sphere-traces the field.
 
 ### Validity engine
 
@@ -150,7 +150,7 @@ Read-mostly inspection surface:
 - Select parts / regions / features so language can refer to them  
 - Highlight validity failures  
 
-No freehand solid modeling tools as the primary path. Display may tessellate fields or ray-march; solid authority remains the field.
+No freehand solid modeling tools as the primary path. Display sphere-traces fields on the GPU; solid authority remains the field. Meshes are not used for interactive display.
 
 ### Export
 
@@ -167,7 +167,8 @@ Plain language is the default input. The interpreter may open new UI surfaces wh
 ### 2. Field-first solids; manufacturing fidelity later
 
 - Runtime: SDF / implicit solids with real **millimeter** dimensions  
-- Display/export: mesh derivatives as reference  
+- Display: GPU sphere-trace of the field  
+- Export: mesh derivatives as reference  
 - Exact B-rep / STEP: future or external  
 - **One solid math** — part kinds differ by generators and checks, not by kernel  
 
