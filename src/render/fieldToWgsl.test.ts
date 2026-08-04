@@ -5,10 +5,11 @@ import { buildField } from "../eval/buildField";
 import { fieldNodeToWgsl } from "./fieldToWgsl";
 
 describe("fieldNodeToWgsl", () => {
-  it("compiles demo smoothUnion with map(), matWeight(), and helpers", () => {
+  it("compiles demo smoothUnion with sampleField / map / matWeight", () => {
     const result = fieldNodeToWgsl(demoFieldNode(), {
       leafMaterialWeight: { "demo-cube": 0, "demo-sphere": 1 },
     });
+    assert.match(result.mapSource, /fn sampleField\(p: vec3<f32>\) -> vec2<f32>/);
     assert.match(result.mapSource, /fn map\(p: vec3<f32>\) -> f32/);
     assert.match(result.mapSource, /fn matWeight\(p: vec3<f32>\) -> f32/);
     assert.match(result.mapSource, /sdBox/);

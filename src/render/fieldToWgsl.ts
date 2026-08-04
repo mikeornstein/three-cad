@@ -2,8 +2,9 @@
  * Compile a serializable FieldNode tree into WGSL for GPU sphere tracing.
  *
  * Produces helpers +:
- * - `fn map(p) -> f32` — signed distance (mm, f < 0 inside)
- * - `fn matWeight(p) -> f32` — material blend weight (0…1) from leaf table
+ * - `fn sampleField(p) -> vec2<f32>` — x = signed distance (mm), y = material weight
+ * - `fn map(p) -> f32` — convenience wrapper
+ * - `fn matWeight(p) -> f32` — convenience wrapper
  *
  * Bound fields after min/max CSG are intentional. Smooth-union blends both
  * distance (soft-min) and material weight with the same h factor so materials
@@ -24,7 +25,7 @@ export interface FieldWgslCompileOptions {
 
 export interface FieldWgslCompileResult {
   /**
-   * WGSL source: SDF helpers + `map` + `matWeight`.
+   * WGSL source: SDF helpers + `sampleField` / `map` / `matWeight`.
    * Intended to be spliced into a larger shader / wgslFn body.
    */
   readonly mapSource: string;
@@ -52,11 +53,6 @@ fn sdCylinderZ(p: vec3<f32>, r: f32, hz: f32) -> f32 {
   let d = abs(vec2<f32>(length(p.xy), p.z)) - vec2<f32>(r, hz);
   return min(max(d.x, d.y), 0.0) + length(max(d, vec2<f32>(0.0, 0.0)));
 }
-
-fn opSmoothUnion(d1: f32, d2: f32, k: f32) -> f32 {
-  let h = clamp(0.5 + 0.5 * (d2 - d1) / k, 0.0, 1.0);
-  return mix(d2, d1, h) - k * h * (1.0 - h);
-}
 `.trim();
 
 interface EmitPair {
@@ -65,7 +61,7 @@ interface EmitPair {
 }
 
 /**
- * Compile FieldNode → WGSL map + matWeight.
+ * Compile FieldNode → WGSL sampleField / map / matWeight.
  * Throws if the tree is empty / unsupported (should not happen for valid docs).
  */
 export function fieldNodeToWgsl(
@@ -127,7 +123,6 @@ export function fieldNodeToWgsl(
         const a = emit(node.a, pointExpr);
         const b = emit(node.b, pointExpr);
         lines.push(`let ${d} = min(${a.d}, ${b.d});`);
-        // Prefer the closer solid's material (matches CPU leafAt).
         lines.push(
           `let ${w} = select(${b.w}, ${a.w}, ${a.d} <= ${b.d});`,
         );
@@ -146,7 +141,6 @@ export function fieldNodeToWgsl(
         const a = emit(node.a, pointExpr);
         const b = emit(node.b, pointExpr);
         lines.push(`let ${d} = max(${a.d}, -${b.d});`);
-        // Difference keeps A's material.
         lines.push(`let ${w} = ${a.w};`);
         return { d, w };
       }
@@ -168,7 +162,7 @@ export function fieldNodeToWgsl(
         return { d, w };
       }
       case "smoothUnion": {
-        // Expand soft-min so distance and material share the same h (continuous).
+        // Soft-min: distance and material share the same h (C1-ish continuous).
         const a = emit(node.a, pointExpr);
         const b = emit(node.b, pointExpr);
         const k = Math.max(node.k, 1e-6);
@@ -179,7 +173,11 @@ export function fieldNodeToWgsl(
         lines.push(
           `let ${d} = mix(${b.d}, ${a.d}, ${h}) - ${f(k)} * ${h} * (1.0 - ${h});`,
         );
-        lines.push(`let ${w} = mix(${b.w}, ${a.w}, ${h});`);
+        // Smoothstep h slightly for material so the color ramp reads cleaner
+        // without changing the geometry soft-min (geometry stays on raw h).
+        const hs = `hs${id}`;
+        lines.push(`let ${hs} = ${h} * ${h} * (3.0 - 2.0 * ${h});`);
+        lines.push(`let ${w} = mix(${b.w}, ${a.w}, ${hs});`);
         return { d, w };
       }
       default: {
@@ -196,14 +194,17 @@ export function fieldNodeToWgsl(
   const mapSource = [
     WGSL_SDF_HELPERS,
     "",
-    "fn map(p: vec3<f32>) -> f32 {",
+    "fn sampleField(p: vec3<f32>) -> vec2<f32> {",
     ...body,
-    `  return ${rootPair.d};`,
+    `  return vec2<f32>(${rootPair.d}, ${rootPair.w});`,
+    "}",
+    "",
+    "fn map(p: vec3<f32>) -> f32 {",
+    "  return sampleField(p).x;",
     "}",
     "",
     "fn matWeight(p: vec3<f32>) -> f32 {",
-    ...body,
-    `  return ${rootPair.w};`,
+    "  return sampleField(p).y;",
     "}",
   ].join("\n");
 
@@ -222,7 +223,6 @@ function f(n: number): string {
   if (!Number.isFinite(n)) {
     throw new Error(`fieldNodeToWgsl: non-finite number ${n}`);
   }
-  // Ensure WGSL float literal (1 → 1.0)
   const s = String(n);
   if (!/[.eE]/.test(s)) return `${s}.0`;
   return s;

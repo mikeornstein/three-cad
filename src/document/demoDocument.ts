@@ -24,9 +24,9 @@ const CORNER = [CUBE_MM, CUBE_MM, CUBE_MM] as const;
 
 /**
  * Soft-min blend radius (mm). Larger = more continuous fillet-like join.
- * ~12 mm on a 100 mm cube keeps the form readable while removing the hard crease.
+ * ~16 mm on a 100 mm cube gives a readable cyan↔amber material gradient.
  */
-export const DEMO_SMOOTH_UNION_K_MM = 12;
+export const DEMO_SMOOTH_UNION_K_MM = 16;
 
 const demoCubeNode = (): FieldNode => ({
   op: "box",
@@ -80,7 +80,7 @@ export function demoPartDef(): PartDef {
     },
     payload: { field: demoFieldNode() },
     attributes: {
-      name: "Demo resin cube ∪ metal sphere",
+      name: "Demo cyan + amber resin (smoothUnion)",
     },
   };
 }

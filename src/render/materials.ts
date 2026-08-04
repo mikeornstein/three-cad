@@ -19,21 +19,38 @@ export interface FieldMaterial {
   readonly sigmaS: readonly [number, number, number];
 }
 
-/** Tinted AM-style resin — cube in the demo. */
-export const MAT_TINTED_RESIN: FieldMaterial = {
-  id: "tinted_resin",
-  label: "Tinted resin",
-  baseColor: [0.15, 0.55, 0.72],
-  roughness: 0.25,
+/** Cyan AM-style resin — cube in the demo (material weight 0). */
+export const MAT_CYAN_RESIN: FieldMaterial = {
+  id: "cyan_resin",
+  label: "Cyan resin",
+  baseColor: [0.12, 0.62, 0.78],
+  roughness: 0.22,
   metalness: 0,
-  transmission: 0.92,
+  transmission: 0.94,
   ior: 1.49,
-  // Prefer blue absorption → warm residual; light scatter for soft SSS.
-  sigmaA: [0.045, 0.02, 0.012],
-  sigmaS: [0.08, 0.1, 0.12],
+  // Absorb red/green more → cyan residual; moderate scatter for soft SSS.
+  sigmaA: [0.055, 0.018, 0.01],
+  sigmaS: [0.06, 0.09, 0.11],
 };
 
-/** Brushed-ish metal — sphere in the demo. */
+/** Amber / orange resin — sphere in the demo (material weight 1). */
+export const MAT_AMBER_RESIN: FieldMaterial = {
+  id: "amber_resin",
+  label: "Amber resin",
+  baseColor: [0.92, 0.48, 0.12],
+  roughness: 0.28,
+  metalness: 0,
+  transmission: 0.94,
+  ior: 1.5,
+  // Absorb blue → warm amber residual.
+  sigmaA: [0.012, 0.035, 0.08],
+  sigmaS: [0.1, 0.08, 0.05],
+};
+
+/** @deprecated Alias — prefer MAT_CYAN_RESIN. */
+export const MAT_TINTED_RESIN = MAT_CYAN_RESIN;
+
+/** Brushed-ish metal — optional opaque leaf. */
 export const MAT_MACHINED_METAL: FieldMaterial = {
   id: "machined_metal",
   label: "Machined metal",
@@ -48,7 +65,8 @@ export const MAT_MACHINED_METAL: FieldMaterial = {
 
 /**
  * Leaf id → material-blend weight for the demo tree.
- * 0 = resin (cube), 1 = metal (sphere). Smooth-union blends these continuously.
+ * 0 = cyan resin (cube), 1 = amber resin (sphere).
+ * Smooth-union blends these continuously for a clean color gradient.
  */
 export const DEMO_LEAF_MATERIAL_WEIGHT: Readonly<Record<string, number>> = {
   "demo-cube": 0,

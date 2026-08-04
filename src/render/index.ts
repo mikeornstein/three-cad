@@ -12,6 +12,8 @@ export {
 } from "./fieldToWgsl";
 export {
   DEMO_LEAF_MATERIAL_WEIGHT,
+  MAT_AMBER_RESIN,
+  MAT_CYAN_RESIN,
   MAT_MACHINED_METAL,
   MAT_TINTED_RESIN,
   type FieldMaterial,

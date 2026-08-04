@@ -2,9 +2,9 @@
  * Scaffold demo solid — proves document → evaluator → viewport (mm, Z-up).
  *
  * Geometry (via demo PartDef / FieldNode):
- * - Cube 100×100×100 mm (tinted resin), corner at origin → [0, 100]³
- * - Sphere diameter 100 mm (metal), center at +X/+Y/+Z vertex (100,100,100)
- * - smoothUnion (soft-min) → continuous multi-material solid
+ * - Cube 100×100×100 mm (cyan resin), corner at origin → [0, 100]³
+ * - Sphere diameter 100 mm (amber resin), center at +X/+Y/+Z vertex (100,100,100)
+ * - smoothUnion (soft-min) → continuous dual-transparent material gradient
  *
  * Display: WebGPU sphere-trace (no marching cubes). Mesh remains export-only.
  */
@@ -45,7 +45,7 @@ export function createDemoSolid(): Mesh {
   const part = demoPartDef();
   const { field, definitionHash } = getDefaultEvaluator().getField(part);
   return createFieldRayMarchMesh(demoFieldNode(), field, {
-    name: "demo-resin-cube-metal-sphere",
+    name: "demo-cyan-amber-resin",
     definitionHash,
   });
 }
@@ -60,7 +60,7 @@ export function createDemoMeshSolid(): Mesh {
     cellSizeMm: EXPORT_CELL_MM,
   });
   return evaluatedPartToThreeMesh(evaluated, {
-    name: "demo-resin-cube-metal-sphere",
+    name: "demo-cyan-amber-resin",
   });
 }
 
