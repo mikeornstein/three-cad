@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createDemoFieldSolid } from "../demo/createDemoSolid";
+import { createHardUnionDemoFieldSolid } from "../demo/createDemoSolid";
 import {
   MICRON_MM,
   measureEdgeOnField,
@@ -18,8 +18,9 @@ const AREA_TOL = 0.5;
 /** Freeform solid-angle estimate: a few hundred mm² is fine. */
 const FREEFORM_AREA_TOL = 200;
 
-describe("measureSurfaceFromField: demo cube ∪ sphere", () => {
-  const field = createDemoFieldSolid();
+// Analytic cut-face formulas assume hard min-union (not the smooth-union product demo).
+describe("measureSurfaceFromField: hard-union cube ∪ sphere", () => {
+  const field = createHardUnionDemoFieldSolid();
   const cutExpect = 10_000 - (Math.PI * 50 * 50) / 4;
   /** Exterior sphere surface ≈ 7/8 of full sphere (one octant buried in cube). */
   const sphereExpect = 4 * Math.PI * 50 * 50 * (7 / 8);
@@ -102,8 +103,8 @@ describe("measureSurfaceFromField: demo cube ∪ sphere", () => {
   });
 });
 
-describe("measurePlanarFaceFromField: demo cube ∪ sphere", () => {
-  const field = createDemoFieldSolid();
+describe("measurePlanarFaceFromField: hard-union cube ∪ sphere", () => {
+  const field = createHardUnionDemoFieldSolid();
 
   it("-y face is 100×100 mm from the field (not mesh)", () => {
     const m = measurePlanarFaceFromField(field, [50, 0, 50], {
@@ -132,8 +133,8 @@ describe("measurePlanarFaceFromField: demo cube ∪ sphere", () => {
   });
 });
 
-describe("measureEdgeOnField: demo cube ∪ sphere", () => {
-  const field = createDemoFieldSolid();
+describe("measureEdgeOnField: hard-union cube ∪ sphere", () => {
+  const field = createHardUnionDemoFieldSolid();
 
   it("extends a mesh seed on a full cube edge to 100 mm", () => {
     const seed = [

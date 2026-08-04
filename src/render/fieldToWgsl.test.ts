@@ -5,12 +5,17 @@ import { buildField } from "../eval/buildField";
 import { fieldNodeToWgsl } from "./fieldToWgsl";
 
 describe("fieldNodeToWgsl", () => {
-  it("compiles demo cube ∪ sphere with map() and helpers", () => {
-    const result = fieldNodeToWgsl(demoFieldNode());
+  it("compiles demo smoothUnion with map(), matWeight(), and helpers", () => {
+    const result = fieldNodeToWgsl(demoFieldNode(), {
+      leafMaterialWeight: { "demo-cube": 0, "demo-sphere": 1 },
+    });
     assert.match(result.mapSource, /fn map\(p: vec3<f32>\) -> f32/);
+    assert.match(result.mapSource, /fn matWeight\(p: vec3<f32>\) -> f32/);
     assert.match(result.mapSource, /sdBox/);
     assert.match(result.mapSource, /sdSphere/);
-    assert.match(result.mapSource, /min\(/);
+    // Soft-min expands h for distance + material blend.
+    assert.match(result.mapSource, /let h\d+/);
+    assert.match(result.mapSource, /mix\(/);
     assert.ok(result.tempCount >= 3);
     // Bounds cover cube [0,100]^3 and sphere at corner r=50
     assert.equal(result.bounds.min[0], 0);
@@ -29,6 +34,15 @@ describe("fieldNodeToWgsl", () => {
     assert.match(wgsl.mapSource, /100\.0/);
   });
 
+  it("blends material weights on smoothUnion leaves", () => {
+    const result = fieldNodeToWgsl(demoFieldNode(), {
+      leafMaterialWeight: { "demo-cube": 0, "demo-sphere": 1 },
+    });
+    // Cube weight 0, sphere weight 1 appear as literals.
+    assert.match(result.mapSource, /let w\d+ = 0\.0;/);
+    assert.match(result.mapSource, /let w\d+ = 1\.0;/);
+  });
+
   it("compiles translate + offset + smoothUnion", () => {
     const result = fieldNodeToWgsl({
       op: "smoothUnion",
@@ -44,7 +58,7 @@ describe("fieldNodeToWgsl", () => {
       },
       b: { op: "box", min: [-5, -5, -5], max: [5, 5, 5] },
     });
-    assert.match(result.mapSource, /opSmoothUnion/);
+    assert.match(result.mapSource, /let h\d+/);
     assert.match(result.mapSource, /let p_\d+/);
     assert.match(result.mapSource, /10\.0/);
   });

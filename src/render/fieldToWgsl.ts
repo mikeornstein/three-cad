@@ -1,17 +1,30 @@
 /**
  * Compile a serializable FieldNode tree into WGSL for GPU sphere tracing.
  *
- * Produces helpers + `fn map(p: vec3<f32>) -> f32` matching CPU FieldSolid.evaluate
- * (mm, f < 0 inside). Bound fields after min/max CSG are intentional.
+ * Produces helpers +:
+ * - `fn map(p) -> f32` — signed distance (mm, f < 0 inside)
+ * - `fn matWeight(p) -> f32` — material blend weight (0…1) from leaf table
+ *
+ * Bound fields after min/max CSG are intentional. Smooth-union blends both
+ * distance (soft-min) and material weight with the same h factor so materials
+ * stay continuous across the join.
  */
 
 import type { FieldNode } from "../document/fieldDef";
 import type { Vec3 } from "../sdf/types";
 import { boundsOf, orderedMax, orderedMin } from "./fieldBounds";
 
+export interface FieldWgslCompileOptions {
+  /**
+   * leafId → material weight in [0, 1].
+   * Missing / empty leafId → 0.
+   */
+  readonly leafMaterialWeight?: Readonly<Record<string, number>>;
+}
+
 export interface FieldWgslCompileResult {
   /**
-   * WGSL source: SDF helpers + `fn map(p: vec3<f32>) -> f32`.
+   * WGSL source: SDF helpers + `map` + `matWeight`.
    * Intended to be spliced into a larger shader / wgslFn body.
    */
   readonly mapSource: string;
@@ -46,17 +59,33 @@ fn opSmoothUnion(d1: f32, d2: f32, k: f32) -> f32 {
 }
 `.trim();
 
+interface EmitPair {
+  readonly d: string;
+  readonly w: string;
+}
+
 /**
- * Compile FieldNode → WGSL map function body.
+ * Compile FieldNode → WGSL map + matWeight.
  * Throws if the tree is empty / unsupported (should not happen for valid docs).
  */
-export function fieldNodeToWgsl(root: FieldNode): FieldWgslCompileResult {
+export function fieldNodeToWgsl(
+  root: FieldNode,
+  options: FieldWgslCompileOptions = {},
+): FieldWgslCompileResult {
+  const leafW = options.leafMaterialWeight ?? {};
   let nextId = 0;
   const lines: string[] = [];
 
-  const emit = (node: FieldNode, pointExpr: string): string => {
+  const weightOf = (leafId?: string): number => {
+    if (!leafId) return 0;
+    const w = leafW[leafId];
+    return w === undefined ? 0 : clamp01(w);
+  };
+
+  const emit = (node: FieldNode, pointExpr: string): EmitPair => {
     const id = nextId++;
     const d = `d${id}`;
+    const w = `w${id}`;
 
     switch (node.op) {
       case "box": {
@@ -71,14 +100,16 @@ export function fieldNodeToWgsl(root: FieldNode): FieldWgslCompileResult {
         lines.push(
           `let ${d} = sdBox((${pointExpr}) - vec3<f32>(${f(cx)}, ${f(cy)}, ${f(cz)}), vec3<f32>(${f(hx)}, ${f(hy)}, ${f(hz)}));`,
         );
-        return d;
+        lines.push(`let ${w} = ${f(weightOf(node.leafId))};`);
+        return { d, w };
       }
       case "sphere": {
         const [cx, cy, cz] = node.center;
         lines.push(
           `let ${d} = sdSphere((${pointExpr}) - vec3<f32>(${f(cx)}, ${f(cy)}, ${f(cz)}), ${f(node.radius)});`,
         );
-        return d;
+        lines.push(`let ${w} = ${f(weightOf(node.leafId))};`);
+        return { d, w };
       }
       case "cylinder": {
         const [cx, cy] = node.centerXy;
@@ -89,25 +120,35 @@ export function fieldNodeToWgsl(root: FieldNode): FieldWgslCompileResult {
         lines.push(
           `let ${d} = sdCylinderZ((${pointExpr}) - vec3<f32>(${f(cx)}, ${f(cy)}, ${f(cz)}), ${f(node.radius)}, ${f(hz)});`,
         );
-        return d;
+        lines.push(`let ${w} = ${f(weightOf(node.leafId))};`);
+        return { d, w };
       }
       case "union": {
         const a = emit(node.a, pointExpr);
         const b = emit(node.b, pointExpr);
-        lines.push(`let ${d} = min(${a}, ${b});`);
-        return d;
+        lines.push(`let ${d} = min(${a.d}, ${b.d});`);
+        // Prefer the closer solid's material (matches CPU leafAt).
+        lines.push(
+          `let ${w} = select(${b.w}, ${a.w}, ${a.d} <= ${b.d});`,
+        );
+        return { d, w };
       }
       case "intersection": {
         const a = emit(node.a, pointExpr);
         const b = emit(node.b, pointExpr);
-        lines.push(`let ${d} = max(${a}, ${b});`);
-        return d;
+        lines.push(`let ${d} = max(${a.d}, ${b.d});`);
+        lines.push(
+          `let ${w} = select(${b.w}, ${a.w}, ${a.d} >= ${b.d});`,
+        );
+        return { d, w };
       }
       case "difference": {
         const a = emit(node.a, pointExpr);
         const b = emit(node.b, pointExpr);
-        lines.push(`let ${d} = max(${a}, -${b});`);
-        return d;
+        lines.push(`let ${d} = max(${a.d}, -${b.d});`);
+        // Difference keeps A's material.
+        lines.push(`let ${w} = ${a.w};`);
+        return { d, w };
       }
       case "translate": {
         const [tx, ty, tz] = node.offset;
@@ -116,19 +157,30 @@ export function fieldNodeToWgsl(root: FieldNode): FieldWgslCompileResult {
           `let ${local} = (${pointExpr}) - vec3<f32>(${f(tx)}, ${f(ty)}, ${f(tz)});`,
         );
         const child = emit(node.solid, local);
-        lines.push(`let ${d} = ${child};`);
-        return d;
+        lines.push(`let ${d} = ${child.d};`);
+        lines.push(`let ${w} = ${child.w};`);
+        return { d, w };
       }
       case "offset": {
         const inner = emit(node.solid, pointExpr);
-        lines.push(`let ${d} = ${inner} - ${f(node.delta)};`);
-        return d;
+        lines.push(`let ${d} = ${inner.d} - ${f(node.delta)};`);
+        lines.push(`let ${w} = ${inner.w};`);
+        return { d, w };
       }
       case "smoothUnion": {
+        // Expand soft-min so distance and material share the same h (continuous).
         const a = emit(node.a, pointExpr);
         const b = emit(node.b, pointExpr);
-        lines.push(`let ${d} = opSmoothUnion(${a}, ${b}, ${f(node.k)});`);
-        return d;
+        const k = Math.max(node.k, 1e-6);
+        const h = `h${id}`;
+        lines.push(
+          `let ${h} = clamp(0.5 + 0.5 * (${b.d} - ${a.d}) / ${f(k)}, 0.0, 1.0);`,
+        );
+        lines.push(
+          `let ${d} = mix(${b.d}, ${a.d}, ${h}) - ${f(k)} * ${h} * (1.0 - ${h});`,
+        );
+        lines.push(`let ${w} = mix(${b.w}, ${a.w}, ${h});`);
+        return { d, w };
       }
       default: {
         const _exhaustive: never = node;
@@ -139,13 +191,19 @@ export function fieldNodeToWgsl(root: FieldNode): FieldWgslCompileResult {
     }
   };
 
-  const rootVar = emit(root, "p");
+  const rootPair = emit(root, "p");
+  const body = lines.map((l) => `  ${l}`);
   const mapSource = [
     WGSL_SDF_HELPERS,
     "",
     "fn map(p: vec3<f32>) -> f32 {",
-    ...lines.map((l) => `  ${l}`),
-    `  return ${rootVar};`,
+    ...body,
+    `  return ${rootPair.d};`,
+    "}",
+    "",
+    "fn matWeight(p: vec3<f32>) -> f32 {",
+    ...body,
+    `  return ${rootPair.w};`,
     "}",
   ].join("\n");
 
@@ -154,6 +212,10 @@ export function fieldNodeToWgsl(root: FieldNode): FieldWgslCompileResult {
     bounds: boundsOf(root),
     tempCount: nextId,
   };
+}
+
+function clamp01(n: number): number {
+  return Math.min(1, Math.max(0, n));
 }
 
 function f(n: number): string {

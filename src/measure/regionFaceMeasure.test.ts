@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { Mesh, Vector3 } from "three";
-import { demoFieldNode } from "../document/demoDocument";
+import { demoHardUnionFieldNode } from "../document/demoDocument";
 import { buildField } from "../eval/buildField";
 import { densifyRegionForHighlight, growSurfaceRegion } from "../sdf/fieldRegion";
 import { measureSelection } from "./measureSelection";
@@ -90,7 +90,8 @@ function regionTopology(
 }
 
 describe("measureSelection: field region faces", () => {
-  const field = buildField(demoFieldNode());
+  // Analytic cut-face areas assume hard min-union (product demo is smoothUnion).
+  const field = buildField(demoHardUnionFieldNode());
   const cutExpect = 10_000 - (Math.PI * 50 * 50) / 4;
 
   it("reports planar cube face area from field (no mesh soup)", () => {

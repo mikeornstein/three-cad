@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { demoPartDef } from "../document/demoDocument";
-import { boxSolid, sphereSolid, union } from "../sdf";
+import { boxSolid, sphereSolid, smoothUnion } from "../sdf";
+import { DEMO_SMOOTH_UNION_K_MM } from "../document/demoDocument";
 import { buildField } from "./buildField";
 import {
   FieldEvaluator,
@@ -10,11 +11,12 @@ import {
 } from "./evaluator";
 
 describe("buildField", () => {
-  it("matches hand-built demo cube ∪ sphere samples", () => {
+  it("matches hand-built demo smoothUnion cube ∪ sphere samples", () => {
     const fromTree = buildField(demoPartDef().payload.field);
-    const hand = union(
+    const hand = smoothUnion(
       boxSolid([0, 0, 0], [100, 100, 100], "demo-cube"),
       sphereSolid([100, 100, 100], 50, "demo-sphere"),
+      DEMO_SMOOTH_UNION_K_MM,
       "demo-union",
     );
 
@@ -34,6 +36,7 @@ describe("buildField", () => {
     }
     assert.equal(fromTree.leafId, "demo-union");
     assert.equal(fromTree.leafAt?.(50, 50, 50), "demo-cube");
+    assert.equal(fromTree.leafAt?.(140, 100, 100), "demo-sphere");
   });
 });
 

@@ -7,8 +7,15 @@ export { boundsOf, orderedMax, orderedMin } from "./fieldBounds";
 export {
   fieldNodeToWgsl,
   WGSL_SDF_HELPERS,
+  type FieldWgslCompileOptions,
   type FieldWgslCompileResult,
 } from "./fieldToWgsl";
+export {
+  DEMO_LEAF_MATERIAL_WEIGHT,
+  MAT_MACHINED_METAL,
+  MAT_TINTED_RESIN,
+  type FieldMaterial,
+} from "./materials";
 export {
   createFieldRayMarchMesh,
   isRayMarchMesh,
