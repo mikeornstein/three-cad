@@ -14,7 +14,7 @@ import { MeasureBar } from "./ui/MeasureBar";
 import { OnscreenConsole } from "./ui/OnscreenConsole";
 import { Viewport } from "./viewport/Viewport";
 
-function main(): void {
+async function main(): Promise<void> {
   const canvas = document.querySelector<HTMLCanvasElement>("#viewport");
   if (!canvas) {
     throw new Error("Missing #viewport canvas");
@@ -38,7 +38,21 @@ function main(): void {
     : null;
   buildTree?.setPart(demoPartDef());
 
+  if (typeof navigator === "undefined" || !navigator.gpu) {
+    const msg =
+      "WebGPU is required for three-cad display. Use Chrome, Edge, Firefox, or Safari 26+ with WebGPU enabled.";
+    screenConsole?.log(`error: ${msg}`);
+    throw new Error(msg);
+  }
+
   const viewport = new Viewport(canvas);
+  try {
+    await viewport.init();
+  } catch (err) {
+    console.error("WebGPU init failed", err);
+    screenConsole?.log(`error: WebGPU init failed — ${String(err)}`);
+    throw err;
+  }
   const filterButton =
     document.querySelector<HTMLButtonElement>("#selection-filter");
 
@@ -119,7 +133,7 @@ function main(): void {
   );
   screenConsole?.log("ids copy to clipboard; measures update in the bottom bar");
   screenConsole?.log(
-    "kernel: SDF field solid · display: GPU sphere-trace (no mesh)",
+    "kernel: SDF field solid · display: WebGPU sphere-trace (WGSL, no mesh)",
   );
   screenConsole?.log(
     "eval: document PartDef → definitionHash cache → field; mesh export-only",
@@ -188,4 +202,6 @@ function echoClipboard(
   }
 }
 
-main();
+main().catch((err) => {
+  console.error(err);
+});

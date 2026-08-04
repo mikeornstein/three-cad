@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { demoFieldNode } from "../document/demoDocument";
 import { buildField } from "../eval/buildField";
-import { fieldNodeToGlsl } from "./fieldToGlsl";
+import { fieldNodeToWgsl } from "./fieldToWgsl";
 
-describe("fieldNodeToGlsl", () => {
+describe("fieldNodeToWgsl", () => {
   it("compiles demo cube ∪ sphere with map() and helpers", () => {
-    const result = fieldNodeToGlsl(demoFieldNode());
-    assert.match(result.mapSource, /float map\(vec3 p\)/);
+    const result = fieldNodeToWgsl(demoFieldNode());
+    assert.match(result.mapSource, /fn map\(p: vec3<f32>\) -> f32/);
     assert.match(result.mapSource, /sdBox/);
     assert.match(result.mapSource, /sdSphere/);
     assert.match(result.mapSource, /min\(/);
@@ -20,21 +20,17 @@ describe("fieldNodeToGlsl", () => {
   it("matches CPU field sign at interior / exterior samples", () => {
     const node = demoFieldNode();
     const field = buildField(node);
-    const glsl = fieldNodeToGlsl(node);
-    // Sanity: compiler bounds align with field bounds
-    assert.equal(glsl.bounds.min[0], field.bounds.min[0]);
-    assert.equal(glsl.bounds.max[2], field.bounds.max[2]);
+    const wgsl = fieldNodeToWgsl(node);
+    assert.equal(wgsl.bounds.min[0], field.bounds.min[0]);
+    assert.equal(wgsl.bounds.max[2], field.bounds.max[2]);
 
-    // Interior of cube
     assert.ok(field.evaluate(50, 50, 50) < 0);
-    // Exterior far away
     assert.ok(field.evaluate(500, 500, 500) > 0);
-    // GLSL source contains the sphere center used by CPU
-    assert.match(glsl.mapSource, /100\.0/);
+    assert.match(wgsl.mapSource, /100\.0/);
   });
 
   it("compiles translate + offset + smoothUnion", () => {
-    const result = fieldNodeToGlsl({
+    const result = fieldNodeToWgsl({
       op: "smoothUnion",
       k: 5,
       a: {
@@ -49,7 +45,7 @@ describe("fieldNodeToGlsl", () => {
       b: { op: "box", min: [-5, -5, -5], max: [5, 5, 5] },
     });
     assert.match(result.mapSource, /opSmoothUnion/);
-    assert.match(result.mapSource, /vec3 p_\d+/);
+    assert.match(result.mapSource, /let p_\d+/);
     assert.match(result.mapSource, /10\.0/);
   });
 });

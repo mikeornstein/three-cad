@@ -12,10 +12,9 @@ import {
   PerspectiveCamera,
   Scene,
   Vector3,
-  WebGLRenderer,
 } from "three";
+import { WebGPURenderer } from "three/webgpu";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { isRayMarchMesh, updateRayMarchUniforms } from "../render";
 
 /** World units are millimeters. Right-handed, Z-up. */
 export const MM = 1;
@@ -23,7 +22,7 @@ export const MM = 1;
 export class Viewport {
   readonly scene = new Scene();
   readonly camera: PerspectiveCamera;
-  readonly renderer: WebGLRenderer;
+  readonly renderer: WebGPURenderer;
   readonly controls: OrbitControls;
 
   private readonly root = new Group();
@@ -31,6 +30,7 @@ export class Viewport {
   private solidMeshes: Mesh[] = [];
   private animationId = 0;
   private disposed = false;
+  private initialized = false;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.scene.background = new Color(0x1a1c1e);
@@ -40,7 +40,7 @@ export class Viewport {
     this.camera = new PerspectiveCamera(50, 1, 0.1 * MM, 100_000 * MM);
     this.camera.up.set(0, 0, 1);
 
-    this.renderer = new WebGLRenderer({
+    this.renderer = new WebGPURenderer({
       canvas,
       antialias: true,
       alpha: false,
@@ -56,6 +56,30 @@ export class Viewport {
     this.addScaleCues();
     this.onResize();
     window.addEventListener("resize", this.onResize);
+  }
+
+  /**
+   * Acquire the WebGPU device. Must be awaited before the render loop
+   * (and before any scene that needs GPU resources) is useful.
+   * Throws if WebGPU is unavailable or init fails.
+   */
+  async init(): Promise<void> {
+    if (this.initialized) return;
+    if (typeof navigator === "undefined" || !navigator.gpu) {
+      throw new Error(
+        "WebGPU is required for three-cad display. Use a browser with WebGPU enabled (Chrome, Edge, Firefox, or Safari 26+).",
+      );
+    }
+    await this.renderer.init();
+    // Product decision: WebGPU only — no silent WebGL2 fallback for field display.
+    const backend = this.renderer.backend as { isWebGPUBackend?: boolean };
+    if (backend.isWebGPUBackend !== true) {
+      this.renderer.dispose();
+      throw new Error(
+        "WebGPU backend unavailable (Three.js fell back to WebGL2). three-cad requires a real WebGPU device.",
+      );
+    }
+    this.initialized = true;
     this.loop();
   }
 
@@ -147,20 +171,11 @@ export class Viewport {
   };
 
   private readonly loop = (): void => {
-    if (this.disposed) return;
+    if (this.disposed || !this.initialized) return;
     this.animationId = requestAnimationFrame(this.loop);
     this.controls.update();
     this.camera.updateMatrixWorld();
-    // Sphere-trace shaders need camera + matrices each frame.
-    for (const mesh of this.solidMeshes) {
-      if (!isRayMarchMesh(mesh)) continue;
-      updateRayMarchUniforms(
-        mesh,
-        this.camera.position,
-        this.camera.projectionMatrix,
-        this.camera.matrixWorldInverse,
-      );
-    }
+    // Field solids use TSL camera built-ins; no per-mesh uniform sync.
     this.renderer.render(this.scene, this.camera);
   };
 }

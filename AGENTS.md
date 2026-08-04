@@ -8,8 +8,8 @@ Playbook for agents working on **three-cad**. Prefer these commands over asking 
 |------|--------|
 | Repo | `mikeornstein/three-cad` |
 | Intent | Text-first mechanical assembly workbench (Three.js, SDF / field solids) |
-| Status | Phase 1 — viewport + SDF kernel demo; GPU sphere-trace display; mesh = export only |
-| Stack | Vite + TypeScript + Three.js + pure-TS SDF kernel (`src/sdf/`) |
+| Status | Phase 1 — viewport + SDF kernel demo; WebGPU sphere-trace display; mesh = export only |
+| Stack | Vite + TypeScript + Three.js (WebGPURenderer) + pure-TS SDF kernel (`src/sdf/`) |
 | Kernel | SDF / implicit is plan of record ([#14](https://github.com/mikeornstein/three-cad/issues/14)); meshes are derivatives only |
 | Units / up | 1 world unit = 1 mm; **Z-up** (right-handed) |
 | Git model | **Issues → branches → PRs** — never commit or push product work to `main` |

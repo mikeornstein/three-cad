@@ -2,7 +2,7 @@
 
 **Text-first mechanical assembly workbench** — not a traditional CAD GUI.
 
-Describe assemblies in plain language (and structured intent). Inspect, measure, and call out features in a 3D viewport. Solids are **SDF / implicit fields** with real millimeter dimensions; triangle meshes are **derivatives** for display and export. Built for fast assembly visualization and **first-class geometric validity** (solid integrity, interference, minimum thickness, surface hygiene). Components are isolatable and exportable (STL / mesh) as reference for humans or AI using other tools.
+Describe assemblies in plain language (and structured intent). Inspect, measure, and call out features in a 3D viewport. Solids are **SDF / implicit fields** with real millimeter dimensions; the viewport **sphere-traces fields on WebGPU**; triangle meshes are **export derivatives only**. Built for fast assembly visualization and **first-class geometric validity** (solid integrity, interference, minimum thickness, surface hygiene). Components are isolatable and exportable (STL / mesh) as reference for humans or AI using other tools.
 
 The interface is **meant to evolve**: language is interpreted into durable document operations, and the system may open new UI affordances when a spatial edit needs them.
 
@@ -20,6 +20,8 @@ npm run dev
 ```
 
 Open the printed local URL (app base is `/three-cad/`, same as production). Orbit / pan / zoom the demo solid (100 mm cube ∪ 100 mm-diameter sphere). Units are **mm**; world is **Z-up**.
+
+**Requires WebGPU** (Chrome, Edge, Firefox, or Safari 26+). There is no WebGL display fallback.
 
 ```bash
 npm run build      # typecheck + production bundle

@@ -1,14 +1,14 @@
 /**
- * Mesh-free field display: FieldNode → GLSL → sphere trace.
+ * Mesh-free field display: FieldNode → WGSL → WebGPU sphere trace.
  * Triangle meshes remain export-only (see src/sdf/mesh).
  */
 
+export { boundsOf, orderedMax, orderedMin } from "./fieldBounds";
 export {
-  boundsOf,
-  fieldNodeToGlsl,
-  GLSL_SDF_HELPERS,
-  type FieldGlslCompileResult,
-} from "./fieldToGlsl";
+  fieldNodeToWgsl,
+  WGSL_SDF_HELPERS,
+  type FieldWgslCompileResult,
+} from "./fieldToWgsl";
 export {
   createFieldRayMarchMesh,
   isRayMarchMesh,

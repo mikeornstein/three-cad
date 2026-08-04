@@ -6,7 +6,7 @@
  * - Sphere diameter 100 mm (radius 50 mm), center at +X/+Y/+Z vertex (100,100,100)
  * - Union → single field solid
  *
- * Display: GPU sphere-trace (no marching cubes). Mesh remains export-only.
+ * Display: WebGPU sphere-trace (no marching cubes). Mesh remains export-only.
  */
 
 import { Mesh } from "three";
@@ -31,7 +31,7 @@ export function createDemoFieldSolid(): FieldSolid {
 }
 
 /**
- * Default viewport solid: FieldNode → GLSL sphere-trace (no mesh).
+ * Default viewport solid: FieldNode → WGSL sphere-trace (no mesh).
  * Field + definitionHash live on userData for pick / measure.
  */
 export function createDemoSolid(): Mesh {
