@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createDemoSolid } from "../demo/createDemoSolid";
+import { createDemoMeshSolid } from "../demo/createDemoSolid";
 import { attachFieldFaceMetrics } from "../measure/measureSelection";
 import { MICRON_MM, nearlyEqual } from "../sdf/fieldMeasure";
 import { buildTopologyIndex } from "./topology";
@@ -15,7 +15,9 @@ const AREA_TOL = 0.5;
 const EDGE_LEN_TOL = 0.05;
 
 describe("topology field measure: demo cube ∪ sphere", () => {
-  const mesh = createDemoSolid();
+  // Mesh derivative used only to exercise mesh-accelerated topology tests.
+  // Viewport display is ray-march (createDemoSolid); export path keeps tessellation.
+  const mesh = createDemoMeshSolid();
   const topo = buildTopologyIndex([mesh]);
   const solid = topo.solids[0]!;
   attachFieldFaceMetrics(solid);

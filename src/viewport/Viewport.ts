@@ -4,14 +4,10 @@ import {
   Box3,
   Color,
   DirectionalLight,
-  EdgesGeometry,
   GridHelper,
   Group,
-  LineBasicMaterial,
   LineSegments,
   Mesh,
-  type Material,
-  type MeshStandardMaterial,
   type Object3D,
   PerspectiveCamera,
   Scene,
@@ -19,17 +15,10 @@ import {
   WebGLRenderer,
 } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import {
-  type DisplayMode,
-  displayModeLabel,
-  nextDisplayMode,
-} from "./displayMode";
+import { isRayMarchMesh, updateRayMarchUniforms } from "../render";
 
 /** World units are millimeters. Right-handed, Z-up. */
 export const MM = 1;
-
-/** User-data key for mesh-mode edge overlays parented under solid meshes. */
-const EDGE_OVERLAY_FLAG = "threeCadEdgeOverlay";
 
 export class Viewport {
   readonly scene = new Scene();
@@ -40,8 +29,6 @@ export class Viewport {
   private readonly root = new Group();
   private readonly content = new Group();
   private solidMeshes: Mesh[] = [];
-  private edgeOverlays: LineSegments[] = [];
-  private displayMode: DisplayMode = "solid";
   private animationId = 0;
   private disposed = false;
 
@@ -72,22 +59,7 @@ export class Viewport {
     this.loop();
   }
 
-  getDisplayMode(): DisplayMode {
-    return this.displayMode;
-  }
-
-  /** Cycle solid → mesh (edges) → wireframe. Returns the new mode. */
-  cycleDisplayMode(): DisplayMode {
-    return this.setDisplayMode(nextDisplayMode(this.displayMode));
-  }
-
-  setDisplayMode(mode: DisplayMode): DisplayMode {
-    this.displayMode = mode;
-    this.applyDisplayMode();
-    return this.displayMode;
-  }
-
-  /** Solid meshes currently in the content group (excludes edge overlays). */
+  /** Solid meshes currently in the content group. */
   getSolidMeshes(): readonly Mesh[] {
     return this.solidMeshes;
   }
@@ -96,17 +68,14 @@ export class Viewport {
   setContent(object: Object3D): void {
     this.clearGroup(this.content);
     this.solidMeshes = [];
-    this.edgeOverlays = [];
 
     this.content.add(object);
     object.traverse((child) => {
-      if (child instanceof Mesh && !child.userData[EDGE_OVERLAY_FLAG]) {
+      if (child instanceof Mesh) {
         this.solidMeshes.push(child);
       }
     });
 
-    this.rebuildEdgeOverlays();
-    this.applyDisplayMode();
     this.frameObject(object);
   }
 
@@ -137,73 +106,6 @@ export class Viewport {
     this.clearGroup(this.content);
     this.controls.dispose();
     this.renderer.dispose();
-  }
-
-  private applyDisplayMode(): void {
-    const showSolid =
-      this.displayMode === "solid" || this.displayMode === "mesh";
-    const showWire = this.displayMode === "wireframe";
-    const showEdges = this.displayMode === "mesh";
-
-    this.content.visible = showSolid || showWire;
-
-    for (const mesh of this.solidMeshes) {
-      // Keep solid mesh itself visible in solid/mesh/wire modes.
-      mesh.visible = true;
-      const materials = Array.isArray(mesh.material)
-        ? mesh.material
-        : [mesh.material];
-      for (const mat of materials) {
-        if ("wireframe" in mat) {
-          (mat as Material & { wireframe: boolean }).wireframe = showWire;
-        }
-        // Push solid faces back slightly so coplanar edge lines win the depth test.
-        if (isOffsetable(mat)) {
-          mat.polygonOffset = showEdges;
-          mat.polygonOffsetFactor = showEdges ? 1 : 0;
-          mat.polygonOffsetUnits = showEdges ? 1 : 0;
-          mat.needsUpdate = true;
-        }
-      }
-    }
-
-    for (const lines of this.edgeOverlays) {
-      lines.visible = showEdges;
-    }
-  }
-
-  private rebuildEdgeOverlays(): void {
-    for (const lines of this.edgeOverlays) {
-      lines.removeFromParent();
-      disposeObject(lines);
-    }
-    this.edgeOverlays = [];
-
-    // Feature edges (dihedral > threshold). Coplanar triangulation diagonals stay hidden.
-    // ~20° keeps cube/sphere crease edges without every geodesic facet on a fine sphere.
-    const thresholdAngle = 20;
-
-    for (const mesh of this.solidMeshes) {
-      const edges = new EdgesGeometry(mesh.geometry, thresholdAngle);
-      const lines = new LineSegments(
-        edges,
-        new LineBasicMaterial({
-          // High contrast on the blue solid; near-black was invisible after z-fight.
-          color: 0xf2f5f8,
-          transparent: true,
-          opacity: 0.95,
-          depthTest: true,
-          depthWrite: false,
-        }),
-      );
-      lines.name = `${mesh.name || "mesh"}-edges`;
-      lines.userData[EDGE_OVERLAY_FLAG] = true;
-      // Draw after the solid so polygon-offset faces don't obscure the lines.
-      lines.renderOrder = 1;
-      // Parent under the mesh so any future transform stays aligned.
-      mesh.add(lines);
-      this.edgeOverlays.push(lines);
-    }
   }
 
   private clearGroup(group: Group): void {
@@ -248,6 +150,17 @@ export class Viewport {
     if (this.disposed) return;
     this.animationId = requestAnimationFrame(this.loop);
     this.controls.update();
+    this.camera.updateMatrixWorld();
+    // Sphere-trace shaders need camera + matrices each frame.
+    for (const mesh of this.solidMeshes) {
+      if (!isRayMarchMesh(mesh)) continue;
+      updateRayMarchUniforms(
+        mesh,
+        this.camera.position,
+        this.camera.projectionMatrix,
+        this.camera.matrixWorldInverse,
+      );
+    }
     this.renderer.render(this.scene, this.camera);
   };
 }
@@ -263,14 +176,3 @@ function disposeObject(object: Object3D): void {
     }
   });
 }
-
-function isOffsetable(
-  mat: Material,
-): mat is Material & Pick<
-  MeshStandardMaterial,
-  "polygonOffset" | "polygonOffsetFactor" | "polygonOffsetUnits" | "needsUpdate"
-> {
-  return "polygonOffset" in mat;
-}
-
-export { displayModeLabel };

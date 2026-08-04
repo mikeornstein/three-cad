@@ -3,7 +3,7 @@
  */
 
 import { Vector3 } from "three";
-import { measurePlanarFaceFromField } from "../sdf/fieldMeasure";
+import { measureSurfaceFromField } from "../sdf/fieldMeasure";
 import type {
   SolidTopology,
   TopologyFace,
@@ -114,61 +114,7 @@ function measureSingle(
   }
 
   if (kind === "face") {
-    const face = solid.faces[localIndex]!;
-    const soup = faceTriangleSoup(solid, face);
-    const meshArea = triangleAreaSum(soup);
-    const meshCentroid = soupCentroidAreaWeighted(soup);
-    const meshNormal = soupAverageNormal(soup);
-    const box = soupAabb(soup);
-    const size = box.getSize(new Vector3());
-    const planar = isPlanarSoup(soup, meshNormal, meshCentroid);
-
-    // Prefer field-based planar measure (mesh is only a seed / fallback).
-    const fieldMetric = refineFaceFromField(solid, face, meshCentroid, meshNormal);
-
-    const area = fieldMetric?.area ?? face.area ?? meshArea;
-    const centroid = fieldMetric
-      ? new Vector3(
-          fieldMetric.centroid[0],
-          fieldMetric.centroid[1],
-          fieldMetric.centroid[2],
-        )
-      : meshCentroid;
-    const normal = fieldMetric
-      ? new Vector3(
-          fieldMetric.normal[0],
-          fieldMetric.normal[1],
-          fieldMetric.normal[2],
-        )
-      : meshNormal;
-
-    const fields: MeasureField[] = [
-      field("Area", formatMm2(area), area),
-      field("Centroid", formatVec3(centroid)),
-      field("Extents", formatDelta(size)),
-      field("AABB", `${formatVec3(box.min)} … ${formatVec3(box.max)}`),
-    ];
-    if (fieldMetric?.rectangular && fieldMetric.width !== undefined) {
-      fields.push(
-        field(
-          "Size",
-          `${formatMm(fieldMetric.width)} × ${formatMm(fieldMetric.height!)}`,
-        ),
-      );
-    }
-    if (face.leafId) {
-      fields.push(field("Field leaf", face.leafId));
-    }
-    if (fieldMetric) {
-      fields.push(field("Geometry", "field measure"));
-    }
-    if (planar || fieldMetric?.rectangular) {
-      fields.push(field("Normal", formatDir(normal)));
-      fields.push(field("Planar", "yes"));
-    } else {
-      fields.push(field("Planar", "no (curved / faceted region)"));
-    }
-    return { title: `Face · ${ref.id}`, fields, empty: false };
+    return measureFace(ref, solid, solid.faces[localIndex]!);
   }
 
   const soup = solidTriangleSoup(solid);
@@ -645,8 +591,152 @@ function field(label: string, value: string, numeric?: number): MeasureField {
   return numeric === undefined ? { label, value } : { label, value, numeric };
 }
 
+/** Face measure: field-first for region faces; mesh soup only as fallback. */
+function measureFace(
+  ref: SelectionRef,
+  solid: SolidTopology,
+  face: TopologyFace,
+): MeasureReport {
+  const isRegionFace =
+    face.regionSamples !== undefined ||
+    face.triangleIndices.length === 0 ||
+    face.regionPlanar !== undefined;
+
+  // --- Field region path (ray-march pick): no triangle soup required ---
+  if (isRegionFace && solid.field) {
+    const seed = face.regionSeed ?? face.centroid;
+
+    // One path for planar and freeform — true field area (no bbox shortcuts).
+    if (face.area === undefined || !face.fieldMeasured) {
+      const metric = measureSurfaceFromField(
+        solid.field,
+        [seed.x, seed.y, seed.z],
+        {
+          leafId: face.leafId,
+          normalHint: [face.normal.x, face.normal.y, face.normal.z],
+          planar: face.regionPlanar,
+        },
+      );
+      if (metric) {
+        face.area = metric.area;
+        face.fieldMeasured = true;
+        face.centroid.set(
+          metric.centroid[0],
+          metric.centroid[1],
+          metric.centroid[2],
+        );
+        face.normal.set(
+          metric.normal[0],
+          metric.normal[1],
+          metric.normal[2],
+        );
+        face.regionPlanar = metric.planar;
+      }
+    }
+
+    if (face.area !== undefined && face.fieldMeasured) {
+      const fields: MeasureField[] = [
+        field("Area", formatMm2(face.area), face.area),
+        field("Centroid", formatVec3(face.centroid)),
+      ];
+      if (
+        face.regionPlanar &&
+        face.regionPlane?.rectangular &&
+        face.regionPlane.width !== undefined
+      ) {
+        fields.push(
+          field(
+            "Size",
+            `${formatMm(face.regionPlane.width)} × ${formatMm(face.regionPlane.height)}`,
+          ),
+        );
+        fields.push(
+          field(
+            "Extents",
+            formatDelta(
+              new Vector3(face.regionPlane.width, face.regionPlane.height, 0),
+            ),
+          ),
+        );
+      }
+      fields.push(field("Normal", formatDir(face.normal)));
+      fields.push(
+        field("Planar", face.regionPlanar === false ? "no (curved)" : "yes"),
+      );
+      if (face.leafId) fields.push(field("Field leaf", face.leafId));
+      fields.push(field("Geometry", "field measure"));
+      return { title: `Face · ${ref.id}`, fields, empty: false };
+    }
+
+    // Measure failed — still report identity, never invent mesh area.
+    const fields: MeasureField[] = [
+      field("Centroid", formatVec3(face.centroid)),
+      field("Normal", formatDir(face.normal)),
+      field("Planar", face.regionPlanar === false ? "no (curved)" : "unknown"),
+    ];
+    if (face.leafId) fields.push(field("Field leaf", face.leafId));
+    fields.push(field("Geometry", "field region"));
+    return { title: `Face · ${ref.id}`, fields, empty: false };
+  }
+
+  // --- Mesh topology path (legacy / tessellated solids) ---
+  const soup = faceTriangleSoup(solid, face);
+  const meshArea = triangleAreaSum(soup);
+  const meshCentroid = soupCentroidAreaWeighted(soup);
+  const meshNormal = soupAverageNormal(soup);
+  const box = soupAabb(soup);
+  const size = box.getSize(new Vector3());
+  const planar = isPlanarSoup(soup, meshNormal, meshCentroid);
+  const fieldMetric = refineFaceFromField(
+    solid,
+    face,
+    meshCentroid,
+    meshNormal,
+  );
+
+  const area = fieldMetric?.area ?? face.area ?? meshArea;
+  const centroid = fieldMetric
+    ? new Vector3(
+        fieldMetric.centroid[0],
+        fieldMetric.centroid[1],
+        fieldMetric.centroid[2],
+      )
+    : meshCentroid;
+  const normal = fieldMetric
+    ? new Vector3(
+        fieldMetric.normal[0],
+        fieldMetric.normal[1],
+        fieldMetric.normal[2],
+      )
+    : meshNormal;
+
+  const fields: MeasureField[] = [
+    field("Area", formatMm2(area), area),
+    field("Centroid", formatVec3(centroid)),
+    field("Extents", formatDelta(size)),
+    field("AABB", `${formatVec3(box.min)} … ${formatVec3(box.max)}`),
+  ];
+  if (fieldMetric?.rectangular && fieldMetric.width !== undefined) {
+    fields.push(
+      field(
+        "Size",
+        `${formatMm(fieldMetric.width)} × ${formatMm(fieldMetric.height!)}`,
+      ),
+    );
+  }
+  if (face.leafId) fields.push(field("Field leaf", face.leafId));
+  if (fieldMetric) fields.push(field("Geometry", "field measure"));
+  if (planar || fieldMetric?.rectangular) {
+    fields.push(field("Normal", formatDir(normal)));
+    fields.push(field("Planar", "yes"));
+  } else {
+    fields.push(field("Planar", "no (curved / faceted region)"));
+  }
+  return { title: `Face · ${ref.id}`, fields, empty: false };
+}
+
 /**
- * Refine face area / frame from the field solid when available.
+ * Refine face area / frame from the field solid when available (mesh path).
  * Mutates face.area / fieldMeasured for reuse.
  */
 function refineFaceFromField(
@@ -654,25 +744,19 @@ function refineFaceFromField(
   face: TopologyFace,
   meshCentroid: Vector3,
   meshNormal: Vector3,
-): ReturnType<typeof measurePlanarFaceFromField> {
+): ReturnType<typeof measureSurfaceFromField> {
   if (face.fieldMeasured && face.area !== undefined) {
     return {
       area: face.area,
       normal: [face.normal.x, face.normal.y, face.normal.z],
       centroid: [face.centroid.x, face.centroid.y, face.centroid.z],
-      rectangular: true,
+      planar: face.regionPlanar !== false,
+      rectangular: face.regionPlane?.rectangular ?? false,
     };
   }
   if (!solid.field) return null;
 
-  // Curved patches (sphere, freeform): keep mesh area — planar field measure
-  // does not apply.
-  const ax = Math.abs(meshNormal.x);
-  const ay = Math.abs(meshNormal.y);
-  const az = Math.abs(meshNormal.z);
-  if (Math.max(ax, ay, az) < 0.9) return null;
-
-  const metric = measurePlanarFaceFromField(
+  const metric = measureSurfaceFromField(
     solid.field,
     [meshCentroid.x, meshCentroid.y, meshCentroid.z],
     {
@@ -690,6 +774,7 @@ function refineFaceFromField(
     metric.centroid[2],
   );
   face.normal.set(metric.normal[0], metric.normal[1], metric.normal[2]);
+  face.regionPlanar = metric.planar;
   return metric;
 }
 

@@ -5,14 +5,25 @@
  * evaluating / projecting on the field to a tolerance.
  */
 
+import {
+  cross,
+  edgeness,
+  EDGENESS_MIN,
+  featureScore,
+  FEATURE_MIN,
+  pairDihedral,
+  planeBasis,
+} from "./fieldFeatures";
+import {
+  FIELD_LINEAR_TOL_MM,
+  MICRON_MM,
+  projectPointOnField,
+  projectToSurface,
+} from "./fieldProject";
 import { fieldNormal, leafAt } from "./leaf";
 import type { FieldSolid, Vec3 } from "./types";
 
-/** Default linear tolerance for projection / extent search (1 µm). */
-export const FIELD_LINEAR_TOL_MM = 1e-3;
-
-/** Alias used by tests / measure policy. */
-export const MICRON_MM = FIELD_LINEAR_TOL_MM;
+export { FIELD_LINEAR_TOL_MM, MICRON_MM, projectPointOnField, projectToSurface };
 
 export function nearlyEqual(a: number, b: number, tol = MICRON_MM): boolean {
   return Math.abs(a - b) <= tol;
@@ -24,44 +35,38 @@ export function nearlyEqualVec(a: Vec3, b: Vec3, tol = MICRON_MM): boolean {
 
 export type Vec3Mut = [number, number, number];
 
-export function projectToSurface(
-  field: FieldSolid,
-  x: number,
-  y: number,
-  z: number,
-  opts?: { maxIter?: number; tol?: number },
-): Vec3 | null {
-  const maxIter = opts?.maxIter ?? 32;
-  const tol = opts?.tol ?? FIELD_LINEAR_TOL_MM * 0.1;
-  let px = x;
-  let py = y;
-  let pz = z;
-  for (let i = 0; i < maxIter; i++) {
-    const f = field.evaluate(px, py, pz);
-    if (Math.abs(f) <= tol) return [px, py, pz];
-    const n = fieldNormal(field, px, py, pz);
-    if (!n) return null;
-    // True-SDF step: move by f along outward normal toward the surface.
-    px -= n[0] * f;
-    py -= n[1] * f;
-    pz -= n[2] * f;
-  }
-  const f = field.evaluate(px, py, pz);
-  return Math.abs(f) <= tol * 10 ? [px, py, pz] : null;
-}
-
-export interface PlanarFaceMeasure {
+/** Measured surface patch (planar or freeform) from the field. */
+export interface SurfaceMeasure {
   area: number;
-  /** Recovered plane normal (unit). */
   normal: Vec3;
   centroid: Vec3;
-  /** True when area came from axis-aligned rectangle extents (w×h). */
+  planar: boolean;
+  /** True when planar and the face is a filled rectangle (area = w×h). */
   rectangular: boolean;
   width?: number;
   height?: number;
 }
 
-export interface PlanarFaceMeasureOpts {
+/** @deprecated Use SurfaceMeasure — kept for call-site clarity on planar-only APIs. */
+export type PlanarFaceMeasure = SurfaceMeasure;
+
+/** Fast plane frame for paint/highlight — extents only, no area. */
+export interface PlanarFaceFrame {
+  readonly normal: Vec3;
+  readonly centroid: Vec3;
+  readonly u: Vec3;
+  readonly v: Vec3;
+  /** Domain s ∈ [s0, s1], t ∈ [t0, t1] in (u,v) from centroid. */
+  readonly s0: number;
+  readonly s1: number;
+  readonly t0: number;
+  readonly t1: number;
+  readonly width: number;
+  readonly height: number;
+  readonly rectangular: boolean;
+}
+
+export interface SurfaceMeasureOpts {
   /** Require this CSG leaf on the face (when present on the field). */
   leafId?: string;
   /** Hint normal (e.g. from mesh face); refined from field. */
@@ -70,23 +75,24 @@ export interface PlanarFaceMeasureOpts {
   maxExtent?: number;
   /** Linear search tolerance (mm). */
   tol?: number;
+  /**
+   * Force planar chart path when true, freeform solid-angle when false.
+   * When omitted, planarity is detected from the field around the seed.
+   */
+  planar?: boolean;
 }
 
+/** @deprecated Use SurfaceMeasureOpts. */
+export type PlanarFaceMeasureOpts = SurfaceMeasureOpts;
+
 /**
- * Measure a planar face region of a field solid.
- *
- * Seed should lie near the face (mesh centroid is fine). Membership is
- * field-based: on surface, normal aligned, optional leaf match.
- *
- * - If the region is a rectangle in the plane (full cube faces), returns w×h
- *   from binary-searched extents (µm linear tol → sub-mm² area).
- * - Otherwise adaptive grid integration on the plane (sphere-cut faces, etc.).
+ * Fast plane frame (extents only) for highlight / paint — no area integration.
  */
-export function measurePlanarFaceFromField(
+export function planarFaceFrameFromField(
   field: FieldSolid,
   seed: Vec3,
   opts: PlanarFaceMeasureOpts = {},
-): PlanarFaceMeasure | null {
+): PlanarFaceFrame | null {
   const tol = opts.tol ?? FIELD_LINEAR_TOL_MM;
   const maxExtent = opts.maxExtent ?? 1e5;
 
@@ -105,7 +111,6 @@ export function measurePlanarFaceFromField(
       n[2] * opts.normalHint[2];
     if (d < 0) n = [-n[0], -n[1], -n[2]];
   }
-  // Snap near-axis normals for stable plane axes (mechanical faces).
   n = snapNearAxis(n, 0.995);
 
   const [u, v] = planeBasis(n);
@@ -114,8 +119,6 @@ export function measurePlanarFaceFromField(
   const onFace = (p: Vec3): boolean =>
     isOnPlanarFace(field, p, origin, n, opts.leafId, tol);
 
-  // Extents along ±u, ±v from origin (rays). Re-center once so mesh-inset
-  // seeds still recover full face width/height.
   let sMax = searchExtent(origin, u, 1, onFace, maxExtent, tol);
   let sMin = searchExtent(origin, u, -1, onFace, maxExtent, tol);
   let tMax = searchExtent(origin, v, 1, onFace, maxExtent, tol);
@@ -137,8 +140,6 @@ export function measurePlanarFaceFromField(
   const height = tMax + tMin;
   if (!(width > tol && height > tol)) return null;
 
-  // Rectangle test: inset corners (exact corners have multi-face normals /
-  // ambiguous inside tests) + interior samples.
   const inset = Math.max(tol * 10, 1e-3);
   const corners: Vec3[] = [
     planePoint(origin, u, v, -sMin + inset, -tMin + inset),
@@ -151,52 +152,133 @@ export function measurePlanarFaceFromField(
     height > 2 * inset &&
     corners.every((c) => onFace(c)) &&
     onFace(planePoint(origin, u, v, 0, 0)) &&
-    onFace(planePoint(origin, u, v, 0.25 * (sMax - sMin), 0.25 * (tMax - tMin)));
+    onFace(
+      planePoint(origin, u, v, 0.25 * (sMax - sMin), 0.25 * (tMax - tMin)),
+    );
 
-  if (rectangular) {
-    // Parameter domain s ∈ [-sMin, sMax], t ∈ [-tMin, tMax]
-    const su = 0.5 * (sMax - sMin);
-    const tv = 0.5 * (tMax - tMin);
-    const centroid = planePoint(origin, u, v, su, tv);
+  // Express domain relative to centroid (center of extent box).
+  const su = 0.5 * (sMax - sMin);
+  const tv = 0.5 * (tMax - tMin);
+  const centroid = planePoint(origin, u, v, su, tv);
+  return {
+    normal: n,
+    centroid,
+    u,
+    v,
+    s0: -sMin - su,
+    s1: sMax - su,
+    t0: -tMin - tv,
+    t1: tMax - tv,
+    width,
+    height,
+    rectangular,
+  };
+}
+
+/**
+ * Universal surface-area measure on a FieldSolid (planar or freeform).
+ *
+ * Authority is the field, not a mesh. One seed on the surface → the crease-
+ * bounded / leaf-bounded patch containing that seed.
+ *
+ * - **Planar** (detected or forced): chart extents + adaptive membership
+ *   integral in the face plane. Full rectangles use exact w×h.
+ * - **Freeform**: equal-solid-angle rays from an interior point; each hit on
+ *   the same leaf (and off hard creases) contributes R² dΩ / |r̂·n|.
+ *
+ * No bbox-area shortcuts — cut planar faces get true membership area.
+ */
+export function measureSurfaceFromField(
+  field: FieldSolid,
+  seedIn: Vec3,
+  opts: SurfaceMeasureOpts = {},
+): SurfaceMeasure | null {
+  const seed = projectToSurface(field, seedIn[0], seedIn[1], seedIn[2], {
+    tol: 1e-6,
+  });
+  if (!seed) return null;
+
+  let n0 = fieldNormal(field, seed[0], seed[1], seed[2]);
+  if (!n0) return null;
+  if (opts.normalHint) {
+    const d =
+      n0[0] * opts.normalHint[0] +
+      n0[1] * opts.normalHint[1] +
+      n0[2] * opts.normalHint[2];
+    if (d < 0) n0 = [-n0[0], -n0[1], -n0[2]];
+  }
+
+  const leafId =
+    opts.leafId !== undefined && opts.leafId !== ""
+      ? opts.leafId
+      : leafAt(field, seed[0], seed[1], seed[2]);
+
+  const planar =
+    opts.planar !== undefined
+      ? opts.planar
+      : surfaceLooksPlanar(field, seed, n0);
+
+  if (planar) {
+    const frame = planarFaceFrameFromField(field, seed, {
+      leafId,
+      normalHint: n0,
+      maxExtent: opts.maxExtent,
+      tol: opts.tol,
+    });
+    if (!frame) return null;
+
+    if (frame.rectangular) {
+      return {
+        area: frame.width * frame.height,
+        normal: frame.normal,
+        centroid: frame.centroid,
+        planar: true,
+        rectangular: true,
+        width: frame.width,
+        height: frame.height,
+      };
+    }
+
+    const tol = opts.tol ?? FIELD_LINEAR_TOL_MM;
+    const onFace = (p: Vec3): boolean =>
+      isOnPlanarFace(field, p, frame.centroid, frame.normal, leafId, tol);
+
+    const { area, centroid } = adaptiveChartArea(
+      frame.centroid,
+      frame.u,
+      frame.v,
+      frame.s0,
+      frame.s1,
+      frame.t0,
+      frame.t1,
+      onFace,
+      // Plane chart: Jacobian = 1 (surface is the plane).
+      () => 1,
+    );
     return {
-      area: width * height,
-      normal: n,
+      area,
+      normal: frame.normal,
       centroid,
-      rectangular: true,
-      width,
-      height,
+      planar: true,
+      rectangular: false,
+      width: frame.width,
+      height: frame.height,
     };
   }
 
-  // Non-rectangular (notches, sphere cuts): plane-grid integration.
-  const area = integrateFaceAreaGrid(
-    origin,
-    u,
-    v,
-    -sMin,
-    sMax,
-    -tMin,
-    tMax,
-    onFace,
-  );
-  const centroid = estimateCentroid(
-    origin,
-    u,
-    v,
-    -sMin,
-    sMax,
-    -tMin,
-    tMax,
-    onFace,
-  );
-  return {
-    area,
-    normal: n,
-    centroid,
-    rectangular: false,
-    width,
-    height,
-  };
+  return measureFreeformLeafArea(field, seed, n0, leafId);
+}
+
+/**
+ * Planar-only convenience wrapper (same result as measureSurfaceFromField
+ * with planar detection / frame path).
+ */
+export function measurePlanarFaceFromField(
+  field: FieldSolid,
+  seed: Vec3,
+  opts: SurfaceMeasureOpts = {},
+): SurfaceMeasure | null {
+  return measureSurfaceFromField(field, seed, { ...opts, planar: true });
 }
 
 function snapNearAxis(n: Vec3, thresh: number): Vec3 {
@@ -208,24 +290,6 @@ function snapNearAxis(n: Vec3, thresh: number): Vec3 {
   if (ax === m) return [n[0] >= 0 ? 1 : -1, 0, 0];
   if (ay === m) return [0, n[1] >= 0 ? 1 : -1, 0];
   return [0, 0, n[2] >= 0 ? 1 : -1];
-}
-
-function planeBasis(n: Vec3): [Vec3, Vec3] {
-  const axis: Vec3 =
-    Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
-  const u0 = cross(n, axis);
-  const uLen = Math.hypot(u0[0], u0[1], u0[2]);
-  const u: Vec3 = [u0[0] / uLen, u0[1] / uLen, u0[2] / uLen];
-  const v0 = cross(n, u);
-  return [u, v0];
-}
-
-function cross(a: Vec3, b: Vec3): Vec3 {
-  return [
-    a[1] * b[2] - a[2] * b[1],
-    a[2] * b[0] - a[0] * b[2],
-    a[0] * b[1] - a[1] * b[0],
-  ];
 }
 
 function planePoint(
@@ -326,40 +390,47 @@ function searchExtent(
   return lo;
 }
 
-/**
- * Regular grid integration of face membership over a plane AABB.
- * Step size targets ~0.1 mm so cut-face error stays small vs mesh (~hundreds mm²).
- */
-function integrateFaceAreaGrid(
-  origin: Vec3,
-  u: Vec3,
-  v: Vec3,
-  s0: number,
-  s1: number,
-  t0: number,
-  t1: number,
-  onFace: (p: Vec3) => boolean,
-): number {
-  const w = s1 - s0;
-  const h = t1 - t0;
-  if (!(w > 0 && h > 0)) return 0;
-  const step = Math.min(0.05, Math.min(w, h) / 200);
-  const nx = Math.max(1, Math.ceil(w / step));
-  const ny = Math.max(1, Math.ceil(h / step));
-  const ds = w / nx;
-  const dt = h / ny;
-  let area = 0;
-  for (let i = 0; i < nx; i++) {
-    for (let j = 0; j < ny; j++) {
-      const s = s0 + (i + 0.5) * ds;
-      const t = t0 + (j + 0.5) * dt;
-      if (onFace(planePoint(origin, u, v, s, t))) area += ds * dt;
-    }
+/** Local normal agreement → planar face (vs freeform leaf). */
+function surfaceLooksPlanar(
+  field: FieldSolid,
+  seed: Vec3,
+  seedN: Vec3,
+): boolean {
+  const [u, v] = planeBasis(seedN);
+  const ring = 8;
+  let sumDot = 0;
+  let total = 0;
+  for (let i = 0; i < 8; i++) {
+    const ang = (i * Math.PI) / 4;
+    const c = Math.cos(ang);
+    const s = Math.sin(ang);
+    const proj = projectToSurface(
+      field,
+      seed[0] + ring * (u[0] * c + v[0] * s),
+      seed[1] + ring * (u[1] * c + v[1] * s),
+      seed[2] + ring * (u[2] * c + v[2] * s),
+      { tol: 1e-5 },
+    );
+    if (!proj) continue;
+    if (featureScore(field, proj) >= FEATURE_MIN) continue;
+    const n = fieldNormal(field, proj[0], proj[1], proj[2]);
+    if (!n) continue;
+    total++;
+    sumDot += n[0] * seedN[0] + n[1] * seedN[1] + n[2] * seedN[2];
   }
-  return area;
+  if (total < 4) return false;
+  return sumDot / total >= 0.998;
 }
 
-function estimateCentroid(
+/**
+ * Adaptive quadtree area on a (u,v) chart.
+ * jac(p) is dA_surface / (ds dt); plane faces use 1.
+ *
+ * Interior/exterior cells exit early; only the boundary band is refined
+ * down to minCell, where a single center sample decides (same bias class
+ * as a uniform grid, but orders of magnitude fewer samples).
+ */
+function adaptiveChartArea(
   origin: Vec3,
   u: Vec3,
   v: Vec3,
@@ -368,26 +439,261 @@ function estimateCentroid(
   t0: number,
   t1: number,
   onFace: (p: Vec3) => boolean,
-): Vec3 {
-  let sx = 0;
-  let sy = 0;
-  let sz = 0;
-  let n = 0;
-  const steps = 24;
-  for (let i = 0; i <= steps; i++) {
-    for (let j = 0; j <= steps; j++) {
-      const s = s0 + ((s1 - s0) * i) / steps;
-      const t = t0 + ((t1 - t0) * j) / steps;
-      const p = planePoint(origin, u, v, s, t);
-      if (!onFace(p)) continue;
-      sx += p[0];
-      sy += p[1];
-      sz += p[2];
-      n++;
+  jac: (p: Vec3) => number,
+  minCell = 0.08,
+): { area: number; centroid: Vec3 } {
+  let area = 0;
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
+  let wSum = 0;
+
+  /** Classify cell: 1 = all in, 0 = all out, -1 = mixed / uncertain. */
+  const classify = (
+    sa: number,
+    sb: number,
+    ta: number,
+    tb: number,
+  ): 0 | 1 | -1 => {
+    // 2×2 corners + center — cheap mixed-cell detector.
+    const pts: [number, number][] = [
+      [sa, ta],
+      [sb, ta],
+      [sa, tb],
+      [sb, tb],
+      [0.5 * (sa + sb), 0.5 * (ta + tb)],
+    ];
+    let nIn = 0;
+    for (const [s, t] of pts) {
+      if (onFace(planePoint(origin, u, v, s, t))) nIn++;
     }
+    if (nIn === 5) return 1;
+    if (nIn === 0) return 0;
+    return -1;
+  };
+
+  const add = (sa: number, sb: number, ta: number, tb: number, f: number): void => {
+    const ds = sb - sa;
+    const dt = tb - ta;
+    if (f <= 0 || !(ds > 0 && dt > 0)) return;
+    const sm = 0.5 * (sa + sb);
+    const tm = 0.5 * (ta + tb);
+    const mid = planePoint(origin, u, v, sm, tm);
+    const j = Math.max(jac(mid), 1e-6);
+    const dA = ds * dt * f * j;
+    area += dA;
+    cx += mid[0] * dA;
+    cy += mid[1] * dA;
+    cz += mid[2] * dA;
+    wSum += dA;
+  };
+
+  const visit = (
+    sa: number,
+    sb: number,
+    ta: number,
+    tb: number,
+    depth: number,
+  ): void => {
+    const ds = sb - sa;
+    const dt = tb - ta;
+    if (!(ds > 0 && dt > 0)) return;
+    const kind = classify(sa, sb, ta, tb);
+    if (kind === 0) return;
+    if (kind === 1) {
+      add(sa, sb, ta, tb, 1);
+      return;
+    }
+    // Mixed: refine, or center-sample at resolution limit.
+    if (ds <= minCell || dt <= minCell || depth >= 16) {
+      const sm = 0.5 * (sa + sb);
+      const tm = 0.5 * (ta + tb);
+      if (onFace(planePoint(origin, u, v, sm, tm))) add(sa, sb, ta, tb, 1);
+      return;
+    }
+    const sm = 0.5 * (sa + sb);
+    const tm = 0.5 * (ta + tb);
+    visit(sa, sm, ta, tm, depth + 1);
+    visit(sm, sb, ta, tm, depth + 1);
+    visit(sa, sm, tm, tb, depth + 1);
+    visit(sm, sb, tm, tb, depth + 1);
+  };
+
+  visit(s0, s1, t0, t1, 0);
+  const centroid: Vec3 =
+    wSum > 1e-18 ? [cx / wSum, cy / wSum, cz / wSum] : origin;
+  return { area, centroid };
+}
+
+/**
+ * Freeform leaf area via equal solid-angle samples from an interior point.
+ * dA = R² dΩ / |r̂ · n| for each surface hit on the same leaf (off creases).
+ */
+function measureFreeformLeafArea(
+  field: FieldSolid,
+  seed: Vec3,
+  seedN: Vec3,
+  leafId: string | undefined,
+): SurfaceMeasure | null {
+  // Interior probe: step against the outward normal until clearly inside.
+  let c: Vec3 = [
+    seed[0] - seedN[0] * 2,
+    seed[1] - seedN[1] * 2,
+    seed[2] - seedN[2] * 2,
+  ];
+  for (let i = 0; i < 24; i++) {
+    const f = field.evaluate(c[0], c[1], c[2]);
+    if (f < -1) break;
+    const n = fieldNormal(field, c[0], c[1], c[2]) ?? seedN;
+    c = [c[0] - n[0] * 2, c[1] - n[1] * 2, c[2] - n[2] * 2];
   }
-  if (n === 0) return origin;
-  return [sx / n, sy / n, sz / n];
+  if (!(field.evaluate(c[0], c[1], c[2]) < 0)) {
+    // Fallback: seed itself as origin of a local chart integral.
+    return measureFreeformChartFallback(field, seed, seedN, leafId);
+  }
+
+  const N = 14000;
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  let area = 0;
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
+  let nx = 0;
+  let ny = 0;
+  let nz = 0;
+  let hits = 0;
+
+  for (let i = 0; i < N; i++) {
+    const y = 1 - (i / Math.max(1, N - 1)) * 2;
+    const r = Math.sqrt(Math.max(0, 1 - y * y));
+    const th = golden * i;
+    const dir: Vec3 = [Math.cos(th) * r, y, Math.sin(th) * r];
+
+    // March from interior along dir to the first surface crossing.
+    let t = 0.3;
+    let hit: Vec3 | null = null;
+    for (let s = 0; s < 96; s++) {
+      const p: Vec3 = [c[0] + dir[0] * t, c[1] + dir[1] * t, c[2] + dir[2] * t];
+      const d = field.evaluate(p[0], p[1], p[2]);
+      if (d >= 0) {
+        hit =
+          projectToSurface(field, p[0], p[1], p[2], { tol: 1e-4 }) ?? p;
+        break;
+      }
+      t += Math.max(-d * 0.9, 0.15);
+      if (t > 400) break;
+    }
+    if (!hit) continue;
+    if (leafId) {
+      const L = leafAt(field, hit[0], hit[1], hit[2]);
+      if (L && L !== leafId) continue;
+    }
+    // Stay on the smooth freeform patch (not cube creases).
+    if (featureScore(field, hit) >= FEATURE_MIN) continue;
+    const nh = fieldNormal(field, hit[0], hit[1], hit[2]);
+    if (!nh) continue;
+
+    const R = Math.hypot(hit[0] - c[0], hit[1] - c[1], hit[2] - c[2]);
+    if (R < 1e-9) continue;
+    const rhat: Vec3 = [
+      (hit[0] - c[0]) / R,
+      (hit[1] - c[1]) / R,
+      (hit[2] - c[2]) / R,
+    ];
+    const cos = Math.abs(
+      nh[0] * rhat[0] + nh[1] * rhat[1] + nh[2] * rhat[2],
+    );
+    if (cos < 1e-4) continue;
+
+    const dA = (R * R * (4 * Math.PI)) / N / cos;
+    area += dA;
+    cx += hit[0] * dA;
+    cy += hit[1] * dA;
+    cz += hit[2] * dA;
+    nx += nh[0];
+    ny += nh[1];
+    nz += nh[2];
+    hits++;
+  }
+
+  if (hits < 8 || area < 1e-6) {
+    return measureFreeformChartFallback(field, seed, seedN, leafId);
+  }
+  const inv = 1 / area;
+  const nlen = Math.hypot(nx, ny, nz) || 1;
+  return {
+    area,
+    centroid: [cx * inv, cy * inv, cz * inv],
+    normal: [nx / nlen, ny / nlen, nz / nlen],
+    planar: false,
+    rectangular: false,
+  };
+}
+
+/** Local tangent-chart integral when solid-angle probing fails. */
+function measureFreeformChartFallback(
+  field: FieldSolid,
+  seed: Vec3,
+  seedN: Vec3,
+  leafId: string | undefined,
+): SurfaceMeasure | null {
+  const [u, v] = planeBasis(seedN);
+  // Walk extents on the surface chart until crease / leaf change.
+  const onRegion = (raw: Vec3): boolean => {
+    const q = projectToSurface(field, raw[0], raw[1], raw[2], { tol: 1e-5 });
+    if (!q) return false;
+    if (featureScore(field, q) >= FEATURE_MIN) return false;
+    if (leafId) {
+      const L = leafAt(field, q[0], q[1], q[2]);
+      if (L && L !== leafId) return false;
+    }
+    const n = fieldNormal(field, q[0], q[1], q[2]);
+    if (!n) return false;
+    // Stay on the same side of the silhouette for this chart.
+    return n[0] * seedN[0] + n[1] * seedN[1] + n[2] * seedN[2] > 0.15;
+  };
+
+  const maxE = 1e4;
+  const tol = FIELD_LINEAR_TOL_MM;
+  const sMax = searchExtent(seed, u, 1, onRegion, maxE, tol);
+  const sMin = searchExtent(seed, u, -1, onRegion, maxE, tol);
+  const tMax = searchExtent(seed, v, 1, onRegion, maxE, tol);
+  const tMin = searchExtent(seed, v, -1, onRegion, maxE, tol);
+  if (sMax + sMin < tol || tMax + tMin < tol) return null;
+
+  const onFace = (p: Vec3): boolean => onRegion(p);
+  const jac = (p: Vec3): number => {
+    const q = projectToSurface(field, p[0], p[1], p[2], { tol: 1e-5 }) ?? p;
+    const n = fieldNormal(field, q[0], q[1], q[2]);
+    if (!n) return 1;
+    const c = Math.abs(
+      n[0] * seedN[0] + n[1] * seedN[1] + n[2] * seedN[2],
+    );
+    return c > 1e-3 ? 1 / c : 1e3;
+  };
+
+  const { area, centroid } = adaptiveChartArea(
+    seed,
+    u,
+    v,
+    -sMin,
+    sMax,
+    -tMin,
+    tMax,
+    onFace,
+    jac,
+    0.35,
+  );
+  if (area < 1e-6) return null;
+  return {
+    area,
+    centroid,
+    normal: seedN,
+    planar: false,
+    rectangular: false,
+    width: sMax + sMin,
+    height: tMax + tMin,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -891,72 +1197,6 @@ function distPointToSegment(p: Vec3, a: Vec3, b: Vec3): number {
 }
 
 /**
- * Product of the two largest |n| components.
- * Peaks on sharp orthant-style edges (cube: 0.5) and corners (~0.33);
- * ~0 on smooth face interiors. Do **not** use ring-vs-center scores for
- * snap — those peak ~0.2 mm *off* the true edge.
- */
-function edgeness(field: FieldSolid, p: Vec3): number {
-  const n = fieldNormal(field, p[0], p[1], p[2]);
-  if (!n) return 0;
-  const a = [Math.abs(n[0]), Math.abs(n[1]), Math.abs(n[2])].sort(
-    (u, v) => v - u,
-  );
-  return a[0]! * a[1]!;
-}
-
-/**
- * Pairwise normal disagreement on a ring around p (projected to surface).
- * High on any sharp crease (cube edge *and* sphere∩cube); ~0 on faces.
- */
-function pairDihedral(
-  field: FieldSolid,
-  p: Vec3,
-  ringMm = 0.35,
-): number {
-  const n0 = fieldNormal(field, p[0], p[1], p[2]);
-  if (!n0) return 0;
-  const [u, v] = planeBasis(n0);
-  const ns: Vec3[] = [];
-  const N = 8;
-  for (let i = 0; i < N; i++) {
-    const ang = (i * 2 * Math.PI) / N;
-    const c = Math.cos(ang);
-    const s = Math.sin(ang);
-    const proj = projectToSurface(
-      field,
-      p[0] + ringMm * (u[0] * c + v[0] * s),
-      p[1] + ringMm * (u[1] * c + v[1] * s),
-      p[2] + ringMm * (u[2] * c + v[2] * s),
-      { tol: 1e-5 },
-    );
-    if (!proj) continue;
-    const n = fieldNormal(field, proj[0], proj[1], proj[2]);
-    if (n) ns.push(n);
-  }
-  let minDot = 1;
-  for (let i = 0; i < ns.length; i++) {
-    for (let j = i + 1; j < ns.length; j++) {
-      const d =
-        ns[i]![0] * ns[j]![0] +
-        ns[i]![1] * ns[j]![1] +
-        ns[i]![2] * ns[j]![2];
-      minDot = Math.min(minDot, d);
-    }
-  }
-  return Math.max(0, 1 - minDot);
-}
-
-/** Combined feature score for coarse search (MC seeds can be ~1–2 mm off). */
-function featureScore(field: FieldSolid, p: Vec3): number {
-  return pairDihedral(field, p) + edgeness(field, p);
-}
-
-/** On-crease threshold (edgeness on a 90° box edge is 0.5; faces are ~0). */
-const EDGENESS_MIN = 0.12;
-const FEATURE_MIN = 0.25;
-
-/**
  * Project near a mesh seed onto the isosurface, then slide in the tangent
  * plane onto a nearby sharp crease (field-only — no op-tree).
  */
@@ -965,6 +1205,7 @@ export function projectToCrease(
   x: number,
   y: number,
   z: number,
+  opts?: { maxFromSeedMm?: number },
 ): Vec3 | null {
   const surface = projectToSurface(field, x, y, z, { tol: 1e-7 });
   if (!surface) return null;
@@ -972,8 +1213,13 @@ export function projectToCrease(
 
   // Multi-scale disk search: pair-dihedral pulls from face toward crease;
   // edgeness peaks *on* the true edge (not 0.2 mm beside it).
-  const maxFromSeed = 3.5;
-  for (const ring of [2.0, 1.2, 0.7, 0.35]) {
+  // Larger maxFromSeed helps edge-filter clicks near sphere∩cube arcs.
+  const maxFromSeed = opts?.maxFromSeedMm ?? 3.5;
+  const rings =
+    maxFromSeed > 6
+      ? [Math.min(8, maxFromSeed * 0.6), 4, 2, 1, 0.5]
+      : [2.0, 1.2, 0.7, 0.35];
+  for (const ring of rings) {
     const n0 = fieldNormal(field, p[0], p[1], p[2]);
     if (!n0) break;
     const [u, v] = planeBasis(n0);
@@ -1248,12 +1494,3 @@ function directionFromEndpoints(points: Vec3[]): Vec3 | null {
   ];
 }
 
-/** Project a world point onto the field surface (Three-friendly). */
-export function projectPointOnField(
-  field: FieldSolid,
-  x: number,
-  y: number,
-  z: number,
-): Vec3 | null {
-  return projectToSurface(field, x, y, z);
-}
