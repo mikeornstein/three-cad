@@ -1,5 +1,6 @@
 /**
  * Left-dock build tree: read-only view of PartDef / FieldNode construction.
+ * Panel defaults collapsed to an icon rail; expand via the header toggle.
  */
 
 import type { PartDef } from "../document/types";
@@ -9,40 +10,88 @@ import {
   type BuildTreeNode,
 } from "./buildTreeModel";
 
+const WIDTH_EXPANDED = "260px";
+const WIDTH_COLLAPSED = "40px";
+
 export interface BuildTreePanelOptions {
   /** Called after a row is activated (clipboard already written when possible). */
   onActivate?: (node: BuildTreeNode, summary: string) => void;
+  /** Panel chrome open state. Default: collapsed (icon rail). */
+  panelCollapsed?: boolean;
 }
 
 export class BuildTreePanel {
   private readonly root: HTMLElement;
   private readonly body: HTMLElement;
+  private readonly toggleBtn: HTMLButtonElement;
+  private readonly labelEl: HTMLElement;
   private readonly onActivate?: (node: BuildTreeNode, summary: string) => void;
   private tree: BuildTreeNode | null = null;
   private collapsed = new Set<string>();
   private selectedPath: string | null = null;
   private activeLeafIds = new Set<string>();
   private nodeByPath = new Map<string, BuildTreeNode>();
+  private panelCollapsed: boolean;
 
   constructor(root: HTMLElement, options?: BuildTreePanelOptions) {
     this.root = root;
     this.onActivate = options?.onActivate;
+    this.panelCollapsed = options?.panelCollapsed ?? true;
     this.root.classList.add("build-tree");
     this.root.setAttribute("role", "tree");
     this.root.setAttribute("aria-label", "Build tree");
 
-    if (!this.root.querySelector(".build-tree-header")) {
-      const header = document.createElement("div");
-      header.className = "build-tree-header";
-      header.textContent = "Build tree";
+    const existingToggle = this.root.querySelector<HTMLButtonElement>(
+      ".build-tree-toggle",
+    );
+    const existingBody =
+      this.root.querySelector<HTMLElement>(".build-tree-body");
+
+    if (existingToggle && existingBody) {
+      this.toggleBtn = existingToggle;
+      this.body = existingBody;
+      this.labelEl =
+        existingToggle.querySelector<HTMLElement>(".build-tree-label") ??
+        this.ensureLabel(existingToggle);
+    } else {
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "build-tree-toggle";
+
+      const icon = document.createElement("span");
+      icon.className = "build-tree-icon";
+      icon.setAttribute("aria-hidden", "true");
+      icon.innerHTML = TREE_ICON_SVG;
+
+      const label = document.createElement("span");
+      label.className = "build-tree-label";
+      label.textContent = "Build tree";
+
+      toggle.append(icon, label);
+
       const body = document.createElement("div");
       body.className = "build-tree-body";
-      this.root.replaceChildren(header, body);
+
+      this.root.replaceChildren(toggle, body);
+      this.toggleBtn = toggle;
+      this.body = body;
+      this.labelEl = label;
     }
 
-    this.body =
-      this.root.querySelector<HTMLElement>(".build-tree-body") ??
-      this.root;
+    this.toggleBtn.addEventListener("click", () => {
+      this.setPanelCollapsed(!this.panelCollapsed);
+    });
+
+    this.applyPanelCollapsed();
+  }
+
+  setPanelCollapsed(collapsed: boolean): void {
+    if (this.panelCollapsed === collapsed) {
+      this.applyPanelCollapsed();
+      return;
+    }
+    this.panelCollapsed = collapsed;
+    this.applyPanelCollapsed();
   }
 
   setPart(part: PartDef | null): void {
@@ -64,6 +113,35 @@ export class BuildTreePanel {
   setActiveLeafIds(ids: readonly string[]): void {
     this.activeLeafIds = new Set(ids.filter(Boolean));
     this.render();
+  }
+
+  private ensureLabel(toggle: HTMLButtonElement): HTMLElement {
+    const label = document.createElement("span");
+    label.className = "build-tree-label";
+    label.textContent = "Build tree";
+    toggle.append(label);
+    return label;
+  }
+
+  private applyPanelCollapsed(): void {
+    this.root.classList.toggle("is-collapsed", this.panelCollapsed);
+    const width = this.panelCollapsed ? WIDTH_COLLAPSED : WIDTH_EXPANDED;
+    this.root.style.setProperty("--build-tree-width", width);
+    document.documentElement.style.setProperty("--build-tree-width", width);
+
+    this.toggleBtn.setAttribute(
+      "aria-expanded",
+      this.panelCollapsed ? "false" : "true",
+    );
+    this.toggleBtn.title = this.panelCollapsed
+      ? "Expand build tree"
+      : "Collapse build tree";
+    this.toggleBtn.setAttribute(
+      "aria-label",
+      this.panelCollapsed ? "Expand build tree" : "Collapse build tree",
+    );
+    this.body.setAttribute("aria-hidden", this.panelCollapsed ? "true" : "false");
+    this.labelEl.hidden = this.panelCollapsed;
   }
 
   private render(): void {
@@ -168,6 +246,14 @@ export class BuildTreePanel {
     this.render();
   }
 }
+
+/** Simple list/tree mark — monochrome, matches chrome. */
+const TREE_ICON_SVG =
+  '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" focusable="false">' +
+  '<rect x="2" y="2.5" width="12" height="1.75" rx="0.5"/>' +
+  '<rect x="2" y="7.125" width="9" height="1.75" rx="0.5"/>' +
+  '<rect x="2" y="11.75" width="11" height="1.75" rx="0.5"/>' +
+  "</svg>";
 
 function indexNodes(root: BuildTreeNode): Map<string, BuildTreeNode> {
   const map = new Map<string, BuildTreeNode>();
