@@ -78,15 +78,19 @@ body {
   background: rgba(70, 50, 20, 0.9);
 }
 
+:root {
+  /* Default collapsed rail; BuildTreePanel updates on toggle. */
+  --build-tree-width: 40px;
+}
+
 /* Left construction dock — document FieldNode tree (read-only). */
 #build-tree,
 .build-tree {
-  --build-tree-width: 260px;
   position: absolute;
   top: 0;
   left: 0;
   bottom: 44px; /* above measure bar */
-  width: var(--build-tree-width);
+  width: var(--build-tree-width, 40px);
   z-index: 2;
   display: flex;
   flex-direction: column;
@@ -99,15 +103,74 @@ body {
   line-height: 1.35;
 }
 
-.build-tree-header {
+#build-tree.is-collapsed,
+.build-tree.is-collapsed {
+  box-shadow: none;
+}
+
+.build-tree-toggle {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
   padding: 10px 12px 8px;
+  width: 100%;
+  border: none;
   border-bottom: 1px solid #2e343a;
+  background: transparent;
   color: #9aa3ad;
+  font: inherit;
   font-size: 11px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
   user-select: none;
+}
+
+.build-tree-toggle:hover {
+  color: #e8eaed;
+  background: rgba(110, 159, 212, 0.08);
+}
+
+.build-tree-toggle:focus-visible {
+  outline: 2px solid #6e9fd4;
+  outline-offset: -2px;
+}
+
+.build-tree-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: inherit;
+}
+
+.build-tree-icon svg {
+  display: block;
+}
+
+.build-tree-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#build-tree.is-collapsed .build-tree-toggle,
+.build-tree.is-collapsed .build-tree-toggle {
+  justify-content: center;
+  padding: 10px 0;
+  border-bottom: none;
+}
+
+#build-tree.is-collapsed .build-tree-body,
+.build-tree.is-collapsed .build-tree-body {
+  display: none;
 }
 
 .build-tree-body {
@@ -222,9 +285,9 @@ body {
 
 #console {
   position: absolute;
-  left: calc(var(--build-tree-width, 260px) + 12px);
+  left: calc(var(--build-tree-width, 40px) + 12px);
   bottom: 72px;
-  width: min(420px, calc(100vw - var(--build-tree-width, 260px) - 24px));
+  width: min(420px, calc(100vw - var(--build-tree-width, 40px) - 24px));
   max-height: min(220px, 32vh);
   display: flex;
   flex-direction: column;
@@ -236,21 +299,80 @@ body {
   overflow: hidden;
   font-size: 12px;
   line-height: 1.4;
+  z-index: 2;
 }
 
-:root {
-  --build-tree-width: 260px;
+#console.is-collapsed {
+  width: 36px;
+  height: 36px;
+  max-height: 36px;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
 }
 
-.console-header {
+.console-toggle {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
   padding: 6px 10px;
+  width: 100%;
+  border: none;
   border-bottom: 1px solid #2e343a;
+  background: transparent;
   color: #9aa3ad;
+  font: inherit;
   font-size: 11px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
   user-select: none;
+}
+
+.console-toggle:hover {
+  color: #e8eaed;
+  background: rgba(110, 159, 212, 0.08);
+}
+
+.console-toggle:focus-visible {
+  outline: 2px solid #6e9fd4;
+  outline-offset: -2px;
+}
+
+.console-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: inherit;
+}
+
+.console-icon svg {
+  display: block;
+}
+
+.console-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#console.is-collapsed .console-toggle {
+  justify-content: center;
+  padding: 0;
+  width: 36px;
+  height: 36px;
+  border-bottom: none;
+}
+
+#console.is-collapsed .console-log {
+  display: none;
 }
 
 .console-log {

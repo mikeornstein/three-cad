@@ -8,7 +8,7 @@
   <body>
     <div id="app">
       <canvas id="viewport"></canvas>
-      <aside id="build-tree" aria-label="Build tree"></aside>
+      <aside id="build-tree" class="is-collapsed" aria-label="Build tree"></aside>
       <div id="toolbar">
         <button
           type="button"
@@ -19,8 +19,12 @@
           All
         </button>
       </div>
-      <div id="console" aria-label="Selection console" aria-live="polite">
-        <div class="console-header">Console</div>
+      <div
+        id="console"
+        class="is-collapsed"
+        aria-label="Selection console"
+        aria-live="polite"
+      >
         <pre id="console-log" class="console-log"></pre>
       </div>
       <div id="measure-bar" aria-label="Selection measures">
