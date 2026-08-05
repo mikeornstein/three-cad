@@ -1,6 +1,7 @@
 import "./styles.css";
 import { demoPartDef } from "./document/demoDocument";
 import { createDemoSolid } from "./demo/createDemoSolid";
+import { DEFAULT_LIBRARY_ENTRY } from "./render/library";
 import { BuildTreePanel } from "./ui/BuildTreePanel";
 import { OnscreenConsole } from "./ui/OnscreenConsole";
 import { Viewport } from "./viewport/Viewport";
@@ -54,6 +55,11 @@ async function main(): Promise<void> {
 
   try {
     const solid = createDemoSolid();
+    // Keep scene look in sync with the library entry used by the field mesh.
+    viewport.applyLook(DEFAULT_LIBRARY_ENTRY.look);
+    screenConsole?.log(
+      `look-dev: «${DEFAULT_LIBRARY_ENTRY.id}» — ${DEFAULT_LIBRARY_ENTRY.label}`,
+    );
     viewport.setContent(solid);
     const hash = solid.userData.definitionHash as string | undefined;
     if (hash) {

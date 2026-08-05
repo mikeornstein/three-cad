@@ -2,8 +2,8 @@
  * Display materials for field solids (OpenPBR-inspired subset).
  * Units: sigma_* in 1/mm (world unit = 1 mm).
  *
- * Resins are tuned for interactive WebGPU: low extinction so dual-volume
- * paths stay cheap and the solids read as highly transparent.
+ * Presets are tuned against refs/ look-dev images (see materials library).
+ * Interactive WebGPU target: rich glass/resin read without nested light rays.
  */
 
 export interface FieldMaterial {
@@ -20,33 +20,76 @@ export interface FieldMaterial {
   readonly sigmaA: readonly [number, number, number];
   /** Scattering coefficient (1/mm), RGB — drives cheap single-scatter SSS. */
   readonly sigmaS: readonly [number, number, number];
+  /**
+   * Fresnel rim / edge glow strength (glass neon edges).
+   * Default 1 when omitted.
+   */
+  readonly rimBoost?: number;
+  /**
+   * Specular highlight gain. Glass wants >1; soft plastic <1.
+   * Default 1 when omitted.
+   */
+  readonly specularBoost?: number;
+  /**
+   * Procedural volume swirl amount in [0, 1] (density variation).
+   * Default 0 when omitted.
+   */
+  readonly swirl?: number;
 }
 
-/** Cyan AM-style resin — cube in the demo (material weight 0). */
+/** Resolve optional display gains with defaults. */
+export function materialRimBoost(m: FieldMaterial): number {
+  return m.rimBoost ?? 1;
+}
+
+export function materialSpecularBoost(m: FieldMaterial): number {
+  return m.specularBoost ?? 1;
+}
+
+export function materialSwirl(m: FieldMaterial): number {
+  return m.swirl ?? 0;
+}
+
+/**
+ * Cyan glass-resin — cube slot (mat weight 0).
+ * Tuned toward refs/mat_ref_01.jpg: deep blue interior, neon Fresnel edges.
+ * Low extinction so a 100 mm slab still reads as see-through glass.
+ */
 export const MAT_CYAN_RESIN: FieldMaterial = {
   id: "cyan_resin",
   label: "Cyan resin",
-  baseColor: [0.12, 0.62, 0.78],
-  roughness: 0.22,
+  // Deep electric blue (linear); edges push toward cyan-white via rim.
+  baseColor: [0.02, 0.22, 0.95],
+  roughness: 0.04,
   metalness: 0,
-  transmission: 0.97,
-  ior: 1.49,
-  // ~2× more transparent than first pass (half extinction).
-  sigmaA: [0.025, 0.008, 0.004],
-  sigmaS: [0.028, 0.04, 0.05],
+  transmission: 0.99,
+  ior: 1.52,
+  // Stronger R/G absorb → deep blue body; B nearly free for glow.
+  sigmaA: [0.04, 0.016, 0.002],
+  sigmaS: [0.012, 0.025, 0.045],
+  rimBoost: 4.0,
+  specularBoost: 2.5,
+  swirl: 0.06,
 };
 
-/** Amber / orange resin — sphere in the demo (material weight 1). */
+/**
+ * Amber glass-resin — sphere slot (mat weight 1).
+ * Tuned toward refs/mat_ref_01.jpg: molten amber volume, bright specular.
+ */
 export const MAT_AMBER_RESIN: FieldMaterial = {
   id: "amber_resin",
   label: "Amber resin",
-  baseColor: [0.92, 0.48, 0.12],
-  roughness: 0.28,
+  baseColor: [1.0, 0.28, 0.015],
+  roughness: 0.05,
   metalness: 0,
-  transmission: 0.97,
-  ior: 1.5,
-  sigmaA: [0.005, 0.016, 0.036],
-  sigmaS: [0.045, 0.036, 0.022],
+  transmission: 0.98,
+  ior: 1.52,
+  // Warm absorption + scatter so swirl filaments read as molten amber.
+  sigmaA: [0.003, 0.025, 0.07],
+  sigmaS: [0.08, 0.05, 0.02],
+  rimBoost: 1.4,
+  specularBoost: 2.5,
+  swirl: 1.0,
 };
 
 /** @deprecated Alias — prefer MAT_CYAN_RESIN. */
@@ -63,6 +106,9 @@ export const MAT_MACHINED_METAL: FieldMaterial = {
   ior: 1.45,
   sigmaA: [8, 8, 8],
   sigmaS: [0, 0, 0],
+  rimBoost: 0.4,
+  specularBoost: 1.2,
+  swirl: 0,
 };
 
 /**

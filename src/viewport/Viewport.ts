@@ -15,6 +15,10 @@ import {
 } from "three";
 import { WebGPURenderer } from "three/webgpu";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import {
+  DEFAULT_LOOK,
+  type SceneLook,
+} from "../render/looks";
 
 /** World units are millimeters. Right-handed, Z-up. */
 export const MM = 1;
@@ -30,6 +34,9 @@ export class Viewport {
   private animationId = 0;
   private disposed = false;
   private initialized = false;
+  private look: SceneLook = DEFAULT_LOOK;
+  private grid: GridHelper | null = null;
+  private axes: AxesHelper | null = null;
 
   /** Rolling FPS readout (updates ~2×/s). */
   private readonly fpsEl: HTMLElement;
@@ -37,7 +44,6 @@ export class Viewport {
   private fpsWindowStart = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
-    this.scene.background = new Color(0x1a1c1e);
     this.scene.add(this.root);
     this.root.add(this.content);
 
@@ -50,8 +56,6 @@ export class Viewport {
       antialias: false,
       alpha: false,
     });
-    // Cap DPR hard — field volume cost scales with pixel count.
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
 
     this.controls = new OrbitControls(this.camera, this.canvas);
     this.controls.enableDamping = true;
@@ -61,10 +65,67 @@ export class Viewport {
     this.fpsEl =
       document.getElementById("fps-meter") ?? ensureFpsElement(canvas);
 
-    this.addLights();
-    this.addScaleCues();
+    this.applyLook(DEFAULT_LOOK);
     this.onResize();
     window.addEventListener("resize", this.onResize);
+  }
+
+  /** Active scene look (background, lights, grid, pixel ratio). */
+  getSceneLook(): SceneLook {
+    return this.look;
+  }
+
+  /**
+   * Apply a scene look: background, Three.js lights (for non-field objects),
+   * grid colors, and pixel-ratio cap. Field solids read lighting from their
+   * own uniforms (set at mesh create time from the same look).
+   */
+  applyLook(look: SceneLook): void {
+    this.look = look;
+    this.scene.background = new Color(look.background);
+    this.renderer.setClearColor(look.background, 1);
+    this.renderer.setPixelRatio(
+      Math.min(window.devicePixelRatio, look.maxPixelRatio),
+    );
+
+    // Rebuild lights under root (keep content + scale cues structure).
+    const toRemove: Object3D[] = [];
+    for (const child of this.root.children) {
+      if (
+        child instanceof AmbientLight ||
+        child instanceof DirectionalLight
+      ) {
+        toRemove.push(child);
+      }
+    }
+    for (const c of toRemove) {
+      this.root.remove(c);
+      if ("dispose" in c && typeof c.dispose === "function") {
+        (c as { dispose: () => void }).dispose();
+      }
+    }
+
+    const ambI =
+      (look.ambient[0] + look.ambient[1] + look.ambient[2]) / 3;
+    const ambient = new AmbientLight(0xffffff, Math.max(ambI * 1.4, 0.15));
+    const key = new DirectionalLight(
+      rgbToHex(look.keyColor),
+      intensityOf(look.keyColor),
+    );
+    key.position.set(look.keyDir[0], look.keyDir[1], look.keyDir[2]);
+    const fill = new DirectionalLight(
+      rgbToHex(look.fillColor),
+      intensityOf(look.fillColor) * 0.9,
+    );
+    fill.position.set(look.fillDir[0], look.fillDir[1], look.fillDir[2]);
+    const rim = new DirectionalLight(
+      rgbToHex(look.rimColor),
+      intensityOf(look.rimColor) * 0.7,
+    );
+    rim.position.set(look.rimDir[0], look.rimDir[1], look.rimDir[2]);
+    this.root.add(ambient, key, fill, rim);
+
+    this.rebuildScaleCues();
   }
 
   /**
@@ -136,26 +197,41 @@ export class Viewport {
     }
   }
 
-  private addLights(): void {
-    const ambient = new AmbientLight(0xffffff, 0.55);
-    const key = new DirectionalLight(0xffffff, 0.95);
-    key.position.set(200, -120, 280);
-    const fill = new DirectionalLight(0xb0c4de, 0.4);
-    fill.position.set(-180, 100, 80);
-    this.root.add(ambient, key, fill);
-  }
+  private rebuildScaleCues(): void {
+    if (this.grid) {
+      this.root.remove(this.grid);
+      this.grid.geometry.dispose();
+      const gMat = this.grid.material;
+      if (Array.isArray(gMat)) gMat.forEach((m) => m.dispose());
+      else gMat.dispose();
+      this.grid = null;
+    }
+    if (this.axes) {
+      this.root.remove(this.axes);
+      this.axes.geometry.dispose();
+      const aMat = this.axes.material;
+      if (Array.isArray(aMat)) aMat.forEach((m) => m.dispose());
+      else (aMat as { dispose?: () => void }).dispose?.();
+      this.axes = null;
+    }
 
-  private addScaleCues(): void {
     // GridHelper is XZ by default (Y-up). Rotate into XY so Z is up.
     const gridSize = 400 * MM;
     const divisions = 40; // 10 mm cells
-    const grid = new GridHelper(gridSize, divisions, 0x5a6570, 0x2e343a);
+    const grid = new GridHelper(
+      gridSize,
+      divisions,
+      this.look.gridCenter,
+      this.look.gridLine,
+    );
     grid.rotation.x = Math.PI / 2;
     grid.position.z = 0;
     this.root.add(grid);
+    this.grid = grid;
 
     const axes = new AxesHelper(80 * MM);
     this.root.add(axes);
+    this.axes = axes;
   }
 
   private readonly onResize = (): void => {
@@ -163,6 +239,9 @@ export class Viewport {
     const height = this.canvas.clientHeight || window.innerHeight;
     this.camera.aspect = width / Math.max(height, 1);
     this.camera.updateProjectionMatrix();
+    this.renderer.setPixelRatio(
+      Math.min(window.devicePixelRatio, this.look.maxPixelRatio),
+    );
     this.renderer.setSize(width, height, false);
   };
 
@@ -219,4 +298,16 @@ function disposeObject(object: Object3D): void {
       for (const m of materials) m.dispose();
     }
   });
+}
+
+function intensityOf(rgb: readonly [number, number, number]): number {
+  return Math.max(rgb[0], rgb[1], rgb[2], 0.01);
+}
+
+function rgbToHex(rgb: readonly [number, number, number]): number {
+  const s = intensityOf(rgb);
+  const r = Math.min(1, rgb[0] / s);
+  const g = Math.min(1, rgb[1] / s);
+  const b = Math.min(1, rgb[2] / s);
+  return new Color(r, g, b).getHex();
 }

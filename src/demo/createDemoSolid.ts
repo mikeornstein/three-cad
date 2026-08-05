@@ -17,6 +17,7 @@ import {
 } from "../eval";
 import type { FieldSolid } from "../sdf";
 import { createFieldRayMarchMesh } from "../render";
+import { DEFAULT_LIBRARY_ENTRY } from "../render/library";
 
 /** Export / legacy tessellation cell size (mm). Not used for default display. */
 const EXPORT_CELL_MM = 1.5;
@@ -32,13 +33,18 @@ export function createDemoFieldSolid(): FieldSolid {
 
 /**
  * Default viewport solid: FieldNode → WGSL sphere-trace (no mesh).
+ * Materials + look from the materials library (refs/mat_ref_01 by default).
  */
 export function createDemoSolid(): Mesh {
   const part = demoPartDef();
   const { definitionHash } = getDefaultEvaluator().getField(part);
+  const entry = DEFAULT_LIBRARY_ENTRY;
   return createFieldRayMarchMesh(demoFieldNode(), {
     name: "demo-cyan-amber-resin",
     definitionHash,
+    material0: entry.material0,
+    material1: entry.material1,
+    look: entry.look,
   });
 }
 
