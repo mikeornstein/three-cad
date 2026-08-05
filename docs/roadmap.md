@@ -40,7 +40,7 @@ A **text-first** mechanical assembly workbench: plain language in, **field-evalu
 - [x] SDF kernel scaffold (`src/sdf/`): primitives, CSG, marching-cubes mesh (export)  
 - [x] Demo solid via SDF (cube ∪ sphere in mm — not full evaluator)  
 - [x] Manifold dependency removed from product path  
-- [x] GPU sphere-trace viewport (`src/render/`) — FieldNode → GLSL; no display meshing  
+- [x] GPU sphere-trace viewport (`src/render/`) — FieldNode → WGSL / WebGPU; no display meshing  
 - [x] Mesh-era selection + measure bar (migration debt; face/solid field pick for ray-march)  
 
 **Still to do (re-aimed for fields):**

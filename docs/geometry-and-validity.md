@@ -17,7 +17,7 @@ Runtime solids are **signed distance / implicit fields** evaluated from the asse
 | SDF / F-rep solids | Robust CSG, offsets, blends; one math for all part kinds |
 | Millimeters | Real dimensions from day one |
 | Derived meshes | Export handoff only (STL / 3MF / glTF) |
-| GPU sphere-trace display | Inspection viewport (FieldNode → GLSL) |
+| WebGPU sphere-trace display | Inspection viewport (FieldNode → WGSL) |
 
 **Not in v0:** OpenCascade / B-rep / STEP as the authority. Those remain a later or external manufacturing bridge.
 
@@ -140,7 +140,7 @@ exportMesh = meshCache.get(definitionHash, quality) ?? fieldToMesh(field, qualit
 - Instances only apply transforms; they do not duplicate part fields.  
 - Assembly-level meshes for export may bake transforms.  
 - Tessellation quality is part of the **export** mesh cache key, not the field identity.  
-- Viewport display compiles `FieldNode` → GLSL and sphere-traces; it does not populate the mesh cache.  
+- Viewport display compiles `FieldNode` → WGSL and sphere-traces on WebGPU; it does not populate the mesh cache.  
 
 ---
 

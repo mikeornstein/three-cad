@@ -72,8 +72,8 @@ Everything that permanently changes the design must land as **durable operations
               ├──────────────► Validity Engine    │
               ▼                                   │
 ┌───────────────────────────┐                     │
-│ GPU sphere-trace display  │                     │
-│  FieldNode → GLSL · pick  │                     │
+│ WebGPU sphere-trace display│                    │
+│  FieldNode → WGSL · pick  │                     │
 └─────────────┬─────────────┘                     │
               ▼                                   │
 ┌───────────────────────────┐                     │

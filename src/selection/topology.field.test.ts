@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createDemoMeshSolid } from "../demo/createDemoSolid";
+import { createHardUnionDemoMeshSolid } from "../demo/createDemoSolid";
 import { attachFieldFaceMetrics } from "../measure/measureSelection";
 import { MICRON_MM, nearlyEqual } from "../sdf/fieldMeasure";
 import { buildTopologyIndex } from "./topology";
@@ -14,10 +14,10 @@ const AREA_TOL = 0.5;
 /** Linear edges extended on the field should hit true cube dimensions. */
 const EDGE_LEN_TOL = 0.05;
 
-describe("topology field measure: demo cube ∪ sphere", () => {
-  // Mesh derivative used only to exercise mesh-accelerated topology tests.
-  // Viewport display is ray-march (createDemoSolid); export path keeps tessellation.
-  const mesh = createDemoMeshSolid();
+describe("topology field measure: hard-union cube ∪ sphere", () => {
+  // Analytic edge/face metrics need hard min-union (product demo is smoothUnion).
+  // Mesh derivative only for topology acceleration tests.
+  const mesh = createHardUnionDemoMeshSolid();
   const topo = buildTopologyIndex([mesh]);
   const solid = topo.solids[0]!;
   attachFieldFaceMetrics(solid);

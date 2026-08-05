@@ -12,10 +12,9 @@ import {
   PerspectiveCamera,
   Scene,
   Vector3,
-  WebGLRenderer,
 } from "three";
+import { WebGPURenderer } from "three/webgpu";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { isRayMarchMesh, updateRayMarchUniforms } from "../render";
 
 /** World units are millimeters. Right-handed, Z-up. */
 export const MM = 1;
@@ -23,7 +22,7 @@ export const MM = 1;
 export class Viewport {
   readonly scene = new Scene();
   readonly camera: PerspectiveCamera;
-  readonly renderer: WebGLRenderer;
+  readonly renderer: WebGPURenderer;
   readonly controls: OrbitControls;
 
   private readonly root = new Group();
@@ -31,6 +30,12 @@ export class Viewport {
   private solidMeshes: Mesh[] = [];
   private animationId = 0;
   private disposed = false;
+  private initialized = false;
+
+  /** Rolling FPS readout (updates ~2×/s). */
+  private readonly fpsEl: HTMLElement;
+  private fpsFrames = 0;
+  private fpsWindowStart = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.scene.background = new Color(0x1a1c1e);
@@ -40,22 +45,51 @@ export class Viewport {
     this.camera = new PerspectiveCamera(50, 1, 0.1 * MM, 100_000 * MM);
     this.camera.up.set(0, 0, 1);
 
-    this.renderer = new WebGLRenderer({
+    this.renderer = new WebGPURenderer({
       canvas,
-      antialias: true,
+      // MSAA is expensive with full-screen field shading.
+      antialias: false,
       alpha: false,
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Cap DPR hard — field volume cost scales with pixel count.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
 
     this.controls = new OrbitControls(this.camera, this.canvas);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.screenSpacePanning = true;
 
+    this.fpsEl =
+      document.getElementById("fps-meter") ?? ensureFpsElement(canvas);
+
     this.addLights();
     this.addScaleCues();
     this.onResize();
     window.addEventListener("resize", this.onResize);
+  }
+
+  /**
+   * Acquire the WebGPU device. Must be awaited before the render loop
+   * (and before any scene that needs GPU resources) is useful.
+   * Throws if WebGPU is unavailable or init fails.
+   */
+  async init(): Promise<void> {
+    if (this.initialized) return;
+    if (typeof navigator === "undefined" || !navigator.gpu) {
+      throw new Error(
+        "WebGPU is required for three-cad display. Use a browser with WebGPU enabled (Chrome, Edge, Firefox, or Safari 26+).",
+      );
+    }
+    await this.renderer.init();
+    // Product decision: WebGPU only — no silent WebGL2 fallback for field display.
+    const backend = this.renderer.backend as { isWebGPUBackend?: boolean };
+    if (backend.isWebGPUBackend !== true) {
+      this.renderer.dispose();
+      throw new Error(
+        "WebGPU backend unavailable (Three.js fell back to WebGL2). three-cad requires a real WebGPU device.",
+      );
+    }
+    this.initialized = true;
     this.loop();
   }
 
@@ -147,22 +181,46 @@ export class Viewport {
   };
 
   private readonly loop = (): void => {
-    if (this.disposed) return;
+    if (this.disposed || !this.initialized) return;
     this.animationId = requestAnimationFrame(this.loop);
     this.controls.update();
     this.camera.updateMatrixWorld();
-    // Sphere-trace shaders need camera + matrices each frame.
-    for (const mesh of this.solidMeshes) {
-      if (!isRayMarchMesh(mesh)) continue;
-      updateRayMarchUniforms(
-        mesh,
-        this.camera.position,
-        this.camera.projectionMatrix,
-        this.camera.matrixWorldInverse,
-      );
-    }
+    // Field solids use TSL camera built-ins; no per-mesh uniform sync.
     this.renderer.render(this.scene, this.camera);
+    this.tickFps();
   };
+
+  private tickFps(): void {
+    const now = performance.now();
+    if (this.fpsWindowStart === 0) {
+      this.fpsWindowStart = now;
+      this.fpsFrames = 0;
+      return;
+    }
+    this.fpsFrames += 1;
+    const elapsed = now - this.fpsWindowStart;
+    if (elapsed >= 500) {
+      const fps = (this.fpsFrames * 1000) / elapsed;
+      this.fpsEl.textContent = `${fps.toFixed(0)} FPS`;
+      this.fpsEl.dataset.fps = fps < 20 ? "low" : fps < 40 ? "mid" : "high";
+      this.fpsFrames = 0;
+      this.fpsWindowStart = now;
+    }
+  }
+}
+
+/** Corner FPS badge next to the canvas (created once). */
+function ensureFpsElement(canvas: HTMLCanvasElement): HTMLElement {
+  const existing = document.getElementById("fps-meter");
+  if (existing) return existing;
+  const el = document.createElement("div");
+  el.id = "fps-meter";
+  el.setAttribute("aria-live", "off");
+  el.setAttribute("aria-label", "Frames per second");
+  el.textContent = "— FPS";
+  const host = canvas.parentElement ?? document.body;
+  host.append(el);
+  return el;
 }
 
 function disposeObject(object: Object3D): void {

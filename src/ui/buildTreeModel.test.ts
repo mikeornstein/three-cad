@@ -17,14 +17,15 @@ describe("partToBuildTree / fieldNodeToBuildTree", () => {
     assert.ok(root.detail?.includes("demo-body"));
     assert.equal(root.children?.length, 1);
 
-    const union = root.children![0]!;
-    assert.equal(union.op, "union");
-    assert.equal(union.leafId, "demo-union");
-    assert.equal(union.path, "part/field");
-    assert.equal(union.children?.length, 2);
+    const join = root.children![0]!;
+    assert.equal(join.op, "smoothUnion");
+    assert.equal(join.leafId, "demo-union");
+    assert.equal(join.path, "part/field");
+    assert.equal(join.children?.length, 2);
+    assert.match(join.detail ?? "", /k=/);
 
-    const box = union.children![0]!;
-    const sphere = union.children![1]!;
+    const box = join.children![0]!;
+    const sphere = join.children![1]!;
     assert.equal(box.op, "box");
     assert.equal(box.leafId, "demo-cube");
     assert.equal(box.path, "part/field/a");
