@@ -36,6 +36,43 @@ body {
   touch-action: none;
 }
 
+/* Live frame-rate badge (updated by Viewport). */
+#fps-meter {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  margin: 0;
+  padding: 4px 10px;
+  border: 1px solid #3a4149;
+  border-radius: 6px;
+  background: rgba(26, 28, 30, 0.88);
+  color: #9aa3ad;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+  user-select: none;
+  tabular-nums: true;
+  font-variant-numeric: tabular-nums;
+}
+
+#fps-meter[data-fps="high"] {
+  color: #8fd49a;
+  border-color: #3d5a42;
+}
+
+#fps-meter[data-fps="mid"] {
+  color: #e0c36a;
+  border-color: #5a5030;
+}
+
+#fps-meter[data-fps="low"] {
+  color: #f0a0a0;
+  border-color: #6a3a3a;
+}
+
 #toolbar {
   position: absolute;
   top: 12px;

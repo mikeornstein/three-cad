@@ -32,6 +32,11 @@ export class Viewport {
   private disposed = false;
   private initialized = false;
 
+  /** Rolling FPS readout (updates ~2×/s). */
+  private readonly fpsEl: HTMLElement;
+  private fpsFrames = 0;
+  private fpsWindowStart = 0;
+
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.scene.background = new Color(0x1a1c1e);
     this.scene.add(this.root);
@@ -42,15 +47,20 @@ export class Viewport {
 
     this.renderer = new WebGPURenderer({
       canvas,
-      antialias: true,
+      // MSAA is expensive with full-screen field shading.
+      antialias: false,
       alpha: false,
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Cap DPR hard — field volume cost scales with pixel count.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
 
     this.controls = new OrbitControls(this.camera, this.canvas);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.screenSpacePanning = true;
+
+    this.fpsEl =
+      document.getElementById("fps-meter") ?? ensureFpsElement(canvas);
 
     this.addLights();
     this.addScaleCues();
@@ -177,7 +187,40 @@ export class Viewport {
     this.camera.updateMatrixWorld();
     // Field solids use TSL camera built-ins; no per-mesh uniform sync.
     this.renderer.render(this.scene, this.camera);
+    this.tickFps();
   };
+
+  private tickFps(): void {
+    const now = performance.now();
+    if (this.fpsWindowStart === 0) {
+      this.fpsWindowStart = now;
+      this.fpsFrames = 0;
+      return;
+    }
+    this.fpsFrames += 1;
+    const elapsed = now - this.fpsWindowStart;
+    if (elapsed >= 500) {
+      const fps = (this.fpsFrames * 1000) / elapsed;
+      this.fpsEl.textContent = `${fps.toFixed(0)} FPS`;
+      this.fpsEl.dataset.fps = fps < 20 ? "low" : fps < 40 ? "mid" : "high";
+      this.fpsFrames = 0;
+      this.fpsWindowStart = now;
+    }
+  }
+}
+
+/** Corner FPS badge next to the canvas (created once). */
+function ensureFpsElement(canvas: HTMLCanvasElement): HTMLElement {
+  const existing = document.getElementById("fps-meter");
+  if (existing) return existing;
+  const el = document.createElement("div");
+  el.id = "fps-meter";
+  el.setAttribute("aria-live", "off");
+  el.setAttribute("aria-label", "Frames per second");
+  el.textContent = "— FPS";
+  const host = canvas.parentElement ?? document.body;
+  host.append(el);
+  return el;
 }
 
 function disposeObject(object: Object3D): void {

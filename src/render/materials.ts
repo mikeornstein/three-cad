@@ -1,6 +1,9 @@
 /**
  * Display materials for field solids (OpenPBR-inspired subset).
  * Units: sigma_* in 1/mm (world unit = 1 mm).
+ *
+ * Resins are tuned for interactive WebGPU: low extinction so dual-volume
+ * paths stay cheap and the solids read as highly transparent.
  */
 
 export interface FieldMaterial {
@@ -26,11 +29,11 @@ export const MAT_CYAN_RESIN: FieldMaterial = {
   baseColor: [0.12, 0.62, 0.78],
   roughness: 0.22,
   metalness: 0,
-  transmission: 0.94,
+  transmission: 0.97,
   ior: 1.49,
-  // Absorb red/green more → cyan residual; moderate scatter for soft SSS.
-  sigmaA: [0.055, 0.018, 0.01],
-  sigmaS: [0.06, 0.09, 0.11],
+  // ~2× more transparent than first pass (half extinction).
+  sigmaA: [0.025, 0.008, 0.004],
+  sigmaS: [0.028, 0.04, 0.05],
 };
 
 /** Amber / orange resin — sphere in the demo (material weight 1). */
@@ -40,11 +43,10 @@ export const MAT_AMBER_RESIN: FieldMaterial = {
   baseColor: [0.92, 0.48, 0.12],
   roughness: 0.28,
   metalness: 0,
-  transmission: 0.94,
+  transmission: 0.97,
   ior: 1.5,
-  // Absorb blue → warm amber residual.
-  sigmaA: [0.012, 0.035, 0.08],
-  sigmaS: [0.1, 0.08, 0.05],
+  sigmaA: [0.005, 0.016, 0.036],
+  sigmaS: [0.045, 0.036, 0.022],
 };
 
 /** @deprecated Alias — prefer MAT_CYAN_RESIN. */

@@ -5,8 +5,8 @@
  * Multi-material: leaf weights blend continuously through smooth-union.
  * Demo defaults: cyan resin cube + amber resin sphere (dual transparent gradient).
  *
- * Performance: depth pass is sphere-trace only; color path uses adaptive volume
- * steps and sparse light-thickness samples. Target ≥20 FPS on integrated GPUs.
+ * Performance: depth = sphere-trace only; volume uses few adaptive steps and a
+ * free SDF thickness proxy (no nested light rays). Target ≥20 FPS.
  *
  * WGSL layout: shared helper FunctionNode included by both shade + depth entry
  * points so Three.js does not redeclare sampleField / sdBox / etc.
@@ -58,7 +58,7 @@ export interface FieldRayMarchOptions {
   readonly definitionHash?: string;
   /** Pad AABB (mm) so sphere-trace does not clip the surface. Default 1. */
   readonly padMm?: number;
-  /** Max sphere-trace steps. Default 96. */
+  /** Max sphere-trace steps. Default 64. */
   readonly maxSteps?: number;
   /** Surface hit epsilon (mm). Default 0.05. */
   readonly surfaceEpsMm?: number;
@@ -120,9 +120,9 @@ export function createFieldRayMarchMesh(
   const uFillDir = uniform(new Vector3(-180, 100, 80).normalize());
   const uFillColor = uniform(new Color(0xb0c4de).multiplyScalar(0.32));
   const uBg = uniform(new Color(0x1a1c1e));
-  const uMaxSteps = uniform(float(options.maxSteps ?? 96));
-  const uSurfaceEps = uniform(float(options.surfaceEpsMm ?? 0.05));
-  const uNormalEps = uniform(float(0.1));
+  const uMaxSteps = uniform(float(options.maxSteps ?? 64));
+  const uSurfaceEps = uniform(float(options.surfaceEpsMm ?? 0.08));
+  const uNormalEps = uniform(float(0.15));
 
   const uM0Color = uniform(
     options.color !== undefined
@@ -182,9 +182,9 @@ fn sphereTrace(
   }
   var t = max(aabb.x, 0.0);
   let tFar = aabb.y;
-  let stepScale = 0.85;
+  let stepScale = 0.9;
   let maxS = i32(maxSteps);
-  for (var i = 0; i < 160; i++) {
+  for (var i = 0; i < 80; i++) {
     if (i >= maxS) { break; }
     if (t > tFar) { break; }
     let p = ro + rd * t;
@@ -197,34 +197,23 @@ fn sphereTrace(
   return -1.0;
 }
 
+/** Tetrahedral gradient — 4 field samples instead of 6. */
 fn calcNormal(p: vec3<f32>, normalEps: f32) -> vec3<f32> {
   let e = normalEps;
-  return normalize(vec3<f32>(
-    sampleField(p + vec3<f32>(e, 0.0, 0.0)).x - sampleField(p - vec3<f32>(e, 0.0, 0.0)).x,
-    sampleField(p + vec3<f32>(0.0, e, 0.0)).x - sampleField(p - vec3<f32>(0.0, e, 0.0)).x,
-    sampleField(p + vec3<f32>(0.0, 0.0, e)).x - sampleField(p - vec3<f32>(0.0, 0.0, e)).x
-  ));
+  let k0 = vec3<f32>(1.0, -1.0, -1.0);
+  let k1 = vec3<f32>(-1.0, 1.0, -1.0);
+  let k2 = vec3<f32>(-1.0, -1.0, 1.0);
+  let k3 = vec3<f32>(1.0, 1.0, 1.0);
+  return normalize(
+    k0 * sampleField(p + e * k0).x +
+    k1 * sampleField(p + e * k1).x +
+    k2 * sampleField(p + e * k2).x +
+    k3 * sampleField(p + e * k3).x
+  );
 }
 
 fn fresnelSchlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
   return F0 + (vec3<f32>(1.0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
-}
-
-fn thicknessToOutside(p0: vec3<f32>, dir: vec3<f32>, surfaceEps: f32, maxSteps: i32) -> f32 {
-  var p = p0;
-  var trav = 0.0;
-  for (var i = 0; i < 16; i++) {
-    if (i >= maxSteps) { break; }
-    let d = sampleField(p).x;
-    if (d > surfaceEps) {
-      return trav;
-    }
-    let step = max(-d * 0.9, surfaceEps * 0.6);
-    p = p + dir * step;
-    trav = trav + step;
-    if (trav > 120.0) { break; }
-  }
-  return trav;
 }
 
 ${compiled.mapSource}
@@ -298,21 +287,19 @@ fn shadeField(
     return vec4<f32>(lit + F * specKey * (1.0 - roughness * 0.7), hitT);
   }
 
-  // Soften specular on high-transmission media so the color gradient reads cleanly
-  // (avoids a blown-out white bloom at the soft-min neck).
-  let specAmt = (1.0 - roughness * 0.5) * mix(1.0, 0.28, transmission);
+  // Soften specular on high-transmission media (less neck bloom).
+  let specAmt = (1.0 - roughness * 0.5) * mix(1.0, 0.22, transmission);
   let specular = F * specKey * specAmt;
 
-  // Continuous dual-medium volume: sample mat weight every step for clean gradient.
+  // Dual-medium volume: few adaptive steps, SDF thickness proxy (no nested rays).
   var T = vec3<f32>(1.0);
   var Cvol = vec3<f32>(0.0);
-  var p = pos + rd * (surfaceEps * 2.5);
-  var lastThick = 8.0;
-  let minDs = 0.6;
-  let maxDs = 4.5;
-  let maxPath = 160.0;
+  var p = pos + rd * (surfaceEps * 2.0);
+  let minDs = 1.2;
+  let maxDs = 8.0;
+  let maxPath = 120.0;
 
-  for (var vi = 0; vi < 36; vi++) {
+  for (var vi = 0; vi < 14; vi++) {
     let s = sampleField(p);
     if (s.x > surfaceEps) {
       break;
@@ -325,20 +312,19 @@ fn shadeField(
     let st = sa + ss;
     let albedo = ss / max(st, vec3<f32>(1e-4));
 
-    let ds = clamp(max(-s.x, surfaceEps) * 0.55 + minDs * 0.35, minDs, maxDs);
+    let ds = clamp(max(-s.x, surfaceEps) * 0.65 + minDs * 0.4, minDs, maxDs);
 
-    if ((vi % 3) == 0) {
-      lastThick = thicknessToOutside(p, kDir, surfaceEps, 10);
-    }
-    let lightAtt = exp(-sa * lastThick);
-    let Li = keyColor * lightAtt * 0.28;
+    // Local thickness proxy from SDF (≈ distance to surface * 2) — free.
+    let thickL = max(-s.x, 0.5) * 2.0;
+    let lightAtt = exp(-sa * thickL);
+    let Li = keyColor * lightAtt * 0.32 + fillColor * 0.12;
     let scatter = albedo * Li * col;
 
     let Tr = exp(-st * ds);
     Cvol = Cvol + T * (vec3<f32>(1.0) - Tr) * scatter;
     T = T * Tr;
 
-    if (max(T.x, max(T.y, T.z)) < 0.025) {
+    if (max(T.x, max(T.y, T.z)) < 0.04) {
       break;
     }
     p = p + rd * ds;
@@ -348,10 +334,11 @@ fn shadeField(
   }
 
   let surfaceDiff = baseColor * (
-    ambient * 0.45 + keyColor * ndlKey * 0.18 + fillColor * ndlFill * 0.12
+    ambient * 0.35 + keyColor * ndlKey * 0.12 + fillColor * ndlFill * 0.1
   );
-  let body = Cvol + T * (surfaceDiff * 0.55 + bg * 0.12);
-  let lit = specular + (vec3<f32>(1.0) - F) * body * (0.3 + 0.7 * transmission);
+  // More residual T shows as higher transparency (background bleed).
+  let body = Cvol + T * (surfaceDiff * 0.35 + bg * 0.35);
+  let lit = specular + (vec3<f32>(1.0) - F) * body * (0.2 + 0.8 * transmission);
 
   return vec4<f32>(lit, hitT);
 }
