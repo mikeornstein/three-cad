@@ -35,6 +35,5 @@ export {
   DEMO_SMOOTH_UNION_K_MM,
   demoAssemblyDocument,
   demoFieldNode,
-  demoHardUnionFieldNode,
   demoPartDef,
 } from "./demoDocument";

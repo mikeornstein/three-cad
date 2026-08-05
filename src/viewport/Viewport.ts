@@ -27,7 +27,6 @@ export class Viewport {
 
   private readonly root = new Group();
   private readonly content = new Group();
-  private solidMeshes: Mesh[] = [];
   private animationId = 0;
   private disposed = false;
   private initialized = false;
@@ -93,23 +92,10 @@ export class Viewport {
     this.loop();
   }
 
-  /** Solid meshes currently in the content group. */
-  getSolidMeshes(): readonly Mesh[] {
-    return this.solidMeshes;
-  }
-
   /** Replace scene content (demo solid, later evaluated geometry). */
   setContent(object: Object3D): void {
     this.clearGroup(this.content);
-    this.solidMeshes = [];
-
     this.content.add(object);
-    object.traverse((child) => {
-      if (child instanceof Mesh) {
-        this.solidMeshes.push(child);
-      }
-    });
-
     this.frameObject(object);
   }
 

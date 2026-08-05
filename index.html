@@ -10,27 +10,13 @@
       <canvas id="viewport"></canvas>
       <div id="fps-meter" aria-label="Frames per second" aria-live="off">— FPS</div>
       <aside id="build-tree" class="is-collapsed" aria-label="Build tree"></aside>
-      <div id="toolbar">
-        <button
-          type="button"
-          id="selection-filter"
-          data-filter="all"
-          title="Cycle selection filter: all / solid / face / edge / vertex (F)"
-        >
-          All
-        </button>
-      </div>
       <div
         id="console"
         class="is-collapsed"
-        aria-label="Selection console"
+        aria-label="Console"
         aria-live="polite"
       >
         <pre id="console-log" class="console-log"></pre>
-      </div>
-      <div id="measure-bar" aria-label="Selection measures">
-        <div class="measure-bar-title">No selection</div>
-        <div class="measure-bar-fields"></div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

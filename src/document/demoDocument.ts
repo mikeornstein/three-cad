@@ -56,20 +56,6 @@ export function demoFieldNode(): FieldNode {
   };
 }
 
-/**
- * Hard min-union of the same leaves — used by analytic measure / topology tests
- * that assert square-minus-quarter-disk and exact 50 mm clipped edges.
- * Not the interactive demo (see {@link demoFieldNode}).
- */
-export function demoHardUnionFieldNode(): FieldNode {
-  return {
-    op: "union",
-    leafId: "demo-union",
-    a: demoCubeNode(),
-    b: demoSphereNode(),
-  };
-}
-
 export function demoPartDef(): PartDef {
   return {
     id: "demo-body",
