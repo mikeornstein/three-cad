@@ -1,5 +1,5 @@
 /**
- * Turn an evaluated mesh into a Three.js Mesh with field authority stashed.
+ * Turn an evaluated mesh into a Three.js Mesh (export / mesh experiments).
  */
 
 import {
@@ -9,7 +9,6 @@ import {
   Mesh,
   MeshStandardMaterial,
 } from "three";
-import type { FieldSolid } from "../sdf";
 import type { EvaluatedPart } from "./evaluator";
 
 export interface ToThreeMeshOptions {
@@ -22,7 +21,7 @@ export function evaluatedPartToThreeMesh(
   evaluated: EvaluatedPart,
   options: ToThreeMeshOptions = {},
 ): Mesh {
-  return derivedToThreeMesh(evaluated.mesh, evaluated.field, {
+  return derivedToThreeMesh(evaluated.mesh, {
     name: options.name,
     color: options.color,
     definitionHash: options.definitionHash ?? evaluated.definitionHash,
@@ -32,7 +31,6 @@ export function evaluatedPartToThreeMesh(
 
 export function derivedToThreeMesh(
   meshData: { readonly positions: Float32Array; readonly indices: Uint32Array },
-  field: FieldSolid,
   options: {
     readonly name?: string;
     readonly color?: number;
@@ -60,7 +58,6 @@ export function derivedToThreeMesh(
 
   const threeMesh = new Mesh(geometry, material);
   if (options.name) threeMesh.name = options.name;
-  threeMesh.userData.fieldSolid = field;
   if (options.definitionHash !== undefined) {
     threeMesh.userData.definitionHash = options.definitionHash;
   }

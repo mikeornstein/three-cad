@@ -10,7 +10,7 @@ This document describes the **SDF / implicit solid kernel** (plan of record), ho
 
 ### Field-first solids (plan of record)
 
-Runtime solids are **signed distance / implicit fields** evaluated from the assembly document. Triangle meshes are **derivatives only** (viewport display, temporary picking, STL/3MF/glTF export). They are never the design solid.
+Runtime solids are **signed distance / implicit fields** evaluated from the assembly document. Triangle meshes are **derivatives only** (export handoff: STL/3MF/glTF). They are never the design solid. Interactive display is GPU sphere-trace, not a tessellation.
 
 | Choice | Rationale |
 |--------|-----------|
@@ -29,7 +29,7 @@ Runtime solids are **signed distance / implicit fields** evaluated from the asse
 Document (intent)
     → Evaluator (generators + field kernel)
         → FieldSolid (authority solid, mm)
-            → GPU sphere-trace / field pick (interactive display)
+            → GPU sphere-trace (interactive display)
             → Derived mesh (export only)
 ```
 
@@ -83,7 +83,7 @@ Implications:
 - Fillets, blends, and freeform surfaces live as **field ops / document intent**, then tessellate for display  
 - Thin sheet bodies use offset/shell on fields when distance policy allows  
 - AM / organic parts are natural field / lattice generators  
-- Dimensions in the document are real mm values users can measure in the viewport  
+- Dimensions in the document are real mm values (viewport measure UI deferred)  
 - Interactive display is GPU sphere-trace (infinite surface fidelity within step ε). Marching cubes / dual contouring only at export.  
 
 Higher surface continuity and exact CAD handoff come later.
@@ -182,20 +182,18 @@ Export and checks accept a scope:
 
 ---
 
-## Selection and measurement (migration)
+## Selection and measurement (deferred)
 
-**Plan of record** is field-native identity, not triangle adjacency:
+No geometry selection or measure UI ships today (interim stack removed in #46). **Plan of record** when rebuilt is field-native identity, not triangle adjacency:
 
 | Kind | Field-native idea |
 |------|-------------------|
 | Solid | Instance / part field root |
-| Face / region | **Surface region**: flood-fill on \(f=0\) to sharp creases (edgeness / pair-dihedral). Planar plateaus are the **degenerate** case (stable normal). Freeform patches grow by connectivity. Blends: high-curvature bands (later) or hard stops at creases. Stable ids e.g. `demo-cube/+x`, `demo-sphere/curved`. |
-| Edge | Sharp crease (featureScore) or boundary of two regions; soft ridges later |
+| Face / region | **Surface region**: flood-fill on \(f=0\) to sharp creases. Planar plateaus are the **degenerate** case (stable normal). Freeform patches grow by connectivity. Stable ids e.g. `demo-cube/+x`, `demo-sphere/curved`. |
+| Edge | Sharp crease or boundary of two regions; soft ridges later |
 | Vertex | Multi-edge / multi-face junction samples |
 
-**Decision (#32):** faces are regions, not mesh tris and not whole CSG leaves. Analytic leaf features are an id boost when planar+axis, not the only classifier. Temp feature SDFs (#34) are post-select handles.
-
-**Current codebase:** ray-march pick uses `growSurfaceRegion` + densified region paint; freeform stays on CSG leaf (sphere); measure bar uses field planar measure for region faces (#37); highlight depthTest off for zoom visibility (#36). Mesh topology pick/measure remains for tessellated test paths only.
+Open design issues: #16 (measure), #33 (edges/verts), #34 (feature handles).
 
 Authority measurements (target):
 

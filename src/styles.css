@@ -73,48 +73,6 @@ body {
   border-color: #6a3a3a;
 }
 
-#toolbar {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  display: flex;
-  gap: 8px;
-  pointer-events: none;
-}
-
-#toolbar button {
-  pointer-events: auto;
-  margin: 0;
-  padding: 6px 12px;
-  min-width: 4.5rem;
-  border: 1px solid #3a4149;
-  border-radius: 6px;
-  background: rgba(26, 28, 30, 0.85);
-  color: #e8eaed;
-  font: inherit;
-  font-size: 12px;
-  letter-spacing: 0.03em;
-  cursor: pointer;
-}
-
-#toolbar button:hover {
-  border-color: #6e9fd4;
-  color: #fff;
-}
-
-#toolbar button:focus-visible {
-  outline: 2px solid #6e9fd4;
-  outline-offset: 2px;
-}
-
-#toolbar button[data-filter="solid"],
-#toolbar button[data-filter="face"],
-#toolbar button[data-filter="edge"],
-#toolbar button[data-filter="vertex"] {
-  border-color: #ffb020;
-  background: rgba(70, 50, 20, 0.9);
-}
-
 :root {
   /* Default collapsed rail; BuildTreePanel updates on toggle. */
   --build-tree-width: 40px;
@@ -126,7 +84,7 @@ body {
   position: absolute;
   top: 0;
   left: 0;
-  bottom: 44px; /* above measure bar */
+  bottom: 0;
   width: var(--build-tree-width, 40px);
   z-index: 2;
   display: flex;
@@ -233,15 +191,6 @@ body {
   background: rgba(110, 159, 212, 0.16);
 }
 
-.build-tree-row.is-leaf-active:not(.is-selected) {
-  background: rgba(255, 176, 32, 0.12);
-}
-
-.build-tree-row.is-leaf-active.is-selected {
-  background: rgba(110, 159, 212, 0.22);
-  box-shadow: inset 2px 0 0 #ffb020;
-}
-
 .build-tree-twist {
   flex: 0 0 1.1rem;
   margin: 1px 0 0;
@@ -323,7 +272,7 @@ body {
 #console {
   position: absolute;
   left: calc(var(--build-tree-width, 40px) + 12px);
-  bottom: 72px;
+  bottom: 12px;
   width: min(420px, calc(100vw - var(--build-tree-width, 40px) - 24px));
   max-height: min(220px, 32vh);
   display: flex;
@@ -430,102 +379,4 @@ body {
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-#measure-bar,
-.measure-bar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 2;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px 16px;
-  padding: 8px 14px 10px;
-  border-top: 1px solid #3a4149;
-  background: rgba(16, 18, 20, 0.94);
-  box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.28);
-  pointer-events: auto;
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.measure-bar[data-empty="true"] {
-  color: #8b949e;
-}
-
-.measure-bar-title {
-  flex: 0 0 auto;
-  max-width: 100%;
-  color: #9ecbff;
-  font-weight: 600;
-  font-size: 12px;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.measure-bar[data-empty="true"] .measure-bar-title {
-  color: #8b949e;
-  font-weight: 500;
-}
-
-.measure-bar-fields {
-  flex: 1 1 auto;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-  min-width: 0;
-  align-items: baseline;
-}
-
-.measure-field {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 0;
-}
-
-.measure-field-label {
-  color: #8b949e;
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  white-space: nowrap;
-  user-select: none;
-}
-
-.measure-field-value {
-  color: #e8eaed;
-  font-family:
-    ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    Monaco,
-    Consolas,
-    "Liberation Mono",
-    "Courier New",
-    monospace;
-  font-size: 12px;
-  white-space: nowrap;
-  cursor: pointer;
-  border-radius: 3px;
-  padding: 0 2px;
-}
-
-.measure-field-value:hover {
-  color: #fff;
-  background: rgba(110, 159, 212, 0.18);
-}
-
-.measure-field-value:focus-visible {
-  outline: 1px solid #6e9fd4;
-  outline-offset: 1px;
-}
-
-.measure-field-value.copied {
-  color: #7dcea0;
 }

@@ -39,7 +39,6 @@ import {
   wgslFn,
 } from "three/tsl";
 import type { FieldNode } from "../document/fieldDef";
-import type { FieldSolid } from "../sdf";
 import { fieldNodeToWgsl } from "./fieldToWgsl";
 import {
   DEMO_LEAF_MATERIAL_WEIGHT,
@@ -80,11 +79,9 @@ function colorFromRgb(rgb: readonly [number, number, number]): Color {
 
 /**
  * Create an AABB box mesh whose fragment shader sphere-traces `fieldNode`.
- * Attaches `fieldSolid` for CPU pick / measure when provided.
  */
 export function createFieldRayMarchMesh(
   fieldNode: FieldNode,
-  fieldSolid: FieldSolid | undefined,
   options: FieldRayMarchOptions = {},
 ): FieldRayMarchMesh {
   const leafWeights = options.leafMaterialWeight ?? DEMO_LEAF_MATERIAL_WEIGHT;
@@ -428,7 +425,6 @@ fn hitDepth(
   if (options.name) mesh.name = options.name;
   mesh.userData[RAY_MARCH_USER] = true;
   mesh.userData.fieldNode = fieldNode;
-  if (fieldSolid) mesh.userData.fieldSolid = fieldSolid;
   if (options.definitionHash !== undefined) {
     mesh.userData.definitionHash = options.definitionHash;
   }

@@ -29,7 +29,6 @@ export class BuildTreePanel {
   private tree: BuildTreeNode | null = null;
   private collapsed = new Set<string>();
   private selectedPath: string | null = null;
-  private activeLeafIds = new Set<string>();
   private nodeByPath = new Map<string, BuildTreeNode>();
   private panelCollapsed: boolean;
 
@@ -110,11 +109,6 @@ export class BuildTreePanel {
     this.render();
   }
 
-  setActiveLeafIds(ids: readonly string[]): void {
-    this.activeLeafIds = new Set(ids.filter(Boolean));
-    this.render();
-  }
-
   private ensureLabel(toggle: HTMLButtonElement): HTMLElement {
     const label = document.createElement("span");
     label.className = "build-tree-label";
@@ -159,8 +153,6 @@ export class BuildTreePanel {
   private renderNode(node: BuildTreeNode, depth: number): HTMLElement {
     const hasChildren = !!(node.children && node.children.length > 0);
     const isCollapsed = hasChildren && this.collapsed.has(node.path);
-    const leafActive =
-      !!node.leafId && this.activeLeafIds.has(node.leafId);
     const isSelected = this.selectedPath === node.path;
 
     const row = document.createElement("div");
@@ -175,7 +167,6 @@ export class BuildTreePanel {
     }
     row.style.setProperty("--depth", String(depth));
     if (isSelected) row.classList.add("is-selected");
-    if (leafActive) row.classList.add("is-leaf-active");
 
     const twist = document.createElement("button");
     twist.type = "button";

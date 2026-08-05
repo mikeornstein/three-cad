@@ -2,7 +2,7 @@ import type { FieldSolid } from "./types";
 
 /**
  * Resolve the CSG leaf / material id that owns a world point.
- * Used for field-native face/region selection (#15).
+ * Used for material ownership and future feature identity.
  */
 export function leafAt(
   solid: FieldSolid,

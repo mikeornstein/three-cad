@@ -26,14 +26,3 @@ export {
   type FieldRayMarchMesh,
   type FieldRayMarchOptions,
 } from "./createFieldRayMarchMesh";
-export {
-  pickFieldAtPointer,
-  sphereTraceAlongRay,
-  sphereTraceField,
-  type FieldPickTarget,
-  type FieldRayHit,
-} from "./fieldRayPick";
-export {
-  buildRayMarchTopologyIndex,
-  collectLeafIds,
-} from "./fieldTopology";

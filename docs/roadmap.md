@@ -41,7 +41,7 @@ A **text-first** mechanical assembly workbench: plain language in, **field-evalu
 - [x] Demo solid via SDF (cube ∪ sphere in mm — not full evaluator)  
 - [x] Manifold dependency removed from product path  
 - [x] GPU sphere-trace viewport (`src/render/`) — FieldNode → WGSL / WebGPU; no display meshing  
-- [x] Mesh-era selection + measure bar (migration debt; face/solid field pick for ray-march)  
+- [x] Interim mesh/field pick + measure bar **removed** (#46) — not product-useful; redesign later  
 
 **Still to do (re-aimed for fields):**
 
@@ -49,8 +49,8 @@ A **text-first** mechanical assembly workbench: plain language in, **field-evalu
 - Minimal assembly document load/save  
 - Structured ops for create part / instance / transform  
 - Thin plain-language or text-command mapping into those ops  
-- **Selection v2** — surface regions to creases (#32); edges/verts (#33); feature handles (#34)  
-- **Measure v2** — field distance, bbox, interference-oriented queries  
+- **Selection** (deferred) — field-native regions / edges / feature handles (#33, #34)  
+- **Measure** (deferred) — field distance, bbox, interference-oriented queries (#16)  
 - Mesh import → approximate field + STL export from field meshing  
 - Core checks on fields: solid/export policy, interference, min thickness  
 
@@ -141,8 +141,8 @@ A **text-first** mechanical assembly workbench: plain language in, **field-evalu
 1. ~~Viewport scaffold (mm, Z-up, demo solid)~~ ✅  
 2. ~~SDF kernel + demo; remove Manifold~~ ✅ (initial)  
 3. Docs aligned to field-first ✅ (this track)  
-4. Selection v2: surface-region faces (#32) → edges/verts (#33) → feature handles (#34)  
-4b. Measure v2 (field-native)  
+4. Selection (deferred redesign): regions / edges / feature handles (#33, #34)  
+4b. Measure (deferred): field-native queries (#16)  
 5. Document schema stub + in-memory store  
 6. Evaluator + worker + cache  
 7. Viewport binding to evaluated scene  
@@ -180,7 +180,7 @@ A **text-first** mechanical assembly workbench: plain language in, **field-evalu
 7. ~~**Display:** ray-march vs tessellate?~~ → **GPU sphere-trace display; mesh export-only** (#30)  
 8. **Mesher:** dual contouring timeline for sharp mechanical edges?  
 9. **WASM:** stay pure TS longer, or port libfive-class F-rep?  
-10. ~~**Face pick model**~~ → **Surface region flood-fill to creases**; planar = classification; blends as high-κ bands later (#32)  
+10. **Face pick model** — deferred with selection redesign (#46 removed interim); regions-to-creases remains target intent  
 
 Record decisions here when made.
 

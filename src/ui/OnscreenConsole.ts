@@ -1,7 +1,6 @@
 /**
- * Lightweight on-screen log for selection / clipboard confirmation.
- * Not a full REPL — just a confirmation surface for pick feedback.
- * Defaults collapsed to an icon chip; expand via the header toggle.
+ * Lightweight on-screen status log (errors, demo hash, build-tree feedback).
+ * Not a full REPL. Defaults collapsed to an icon chip; expand via the header toggle.
  */
 
 export class OnscreenConsole {
