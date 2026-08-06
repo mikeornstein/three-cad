@@ -17,6 +17,7 @@ export {
   MAT_MACHINED_METAL,
   MAT_TINTED_RESIN,
   materialRimBoost,
+  materialSpeckDensity,
   materialSpecularBoost,
   materialSwirl,
   type FieldMaterial,
@@ -33,6 +34,12 @@ export {
   MATERIAL_LIBRARY,
   type MaterialLookEntry,
 } from "./library";
+export {
+  DEFAULT_HDR_ID,
+  loadStudioEnvironment,
+  zUpDirectionToYUp,
+  type StudioEnvironment,
+} from "./studioEnv";
 export {
   createFieldRayMarchMesh,
   isRayMarchMesh,

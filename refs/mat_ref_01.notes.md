@@ -17,12 +17,33 @@
 | Backdrop | Flat `#1a1c1e` | Near-black `#03050a` | Soft vignette void |
 | Grid | Dim construction | Slightly brighter center lines | Clean floor + spill |
 
+## Lighting model (important)
+
+**Real HDRI** — `public/env/studio_small_08_1k.hdr` (Poly Haven CC0 **Studio Small 08**).
+
+- Basic photo studio: softboxes / octabox + infinity cove
+- Loaded via `HDRLoader` → equirect sample in WGSL + `PMREMGenerator` for `scene.environment`
+- **Z-up rotation:** `backgroundRotation` / `environmentRotation` = Rx(+90°); field shader `zUpToYUp` matches (HDR +Y ceiling → world +Z, right-side up)
+- Background blurriness/intensity are look knobs; set `backgroundBlurriness: 0` to inspect orientation
+- Key/fill DirectionalLights are probes extracted from the HDR
+
+Do not reintroduce painted studio lights, analytic floor grids, or solid face paint.
+
+## Transparency model
+
+Field solid is an AABB proxy with **real alpha blending**.
+
+- Residual `T` → mesh opacity; scene `GridHelper` draws first and is visible through the glass
+- Color = glass emit (specular + rim + volume + tinted HDR thru)
+
 ## Remaining gaps (interactive path)
 
-- Cube body still lighter / less “sapphire” than the ref (no nested refraction / env map).
-- No true floor reflections or caustics (out of interactive budget).
-- Swirl is procedural density, not authored internal geometry.
-- Soft-union fillet is smoother than the ref’s neck blend.
+- Cube less “deep sapphire” and less neon edge light than the offline ref
+- No caustics / multi-bounce refraction / floor contact shadow
+- Swirl is procedural density, not authored internal geometry
+- Soft-union fillet smoother than ref neck; proportions differ
+- 1k HDR + bilinear `textureLoad` soft-box reflections less sharp than path-traced ref
+- Scalar alpha approximates RGB beer-law
 
 ## Capture
 

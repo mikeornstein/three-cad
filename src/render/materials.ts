@@ -2,8 +2,7 @@
  * Display materials for field solids (OpenPBR-inspired subset).
  * Units: sigma_* in 1/mm (world unit = 1 mm).
  *
- * Presets are tuned against refs/ look-dev images (see materials library).
- * Interactive WebGPU target: rich glass/resin read without nested light rays.
+ * Clear resins with optional volume specks (particulate flecks).
  */
 
 export interface FieldMaterial {
@@ -18,26 +17,21 @@ export interface FieldMaterial {
   readonly ior: number;
   /** Absorption coefficient (1/mm), RGB. */
   readonly sigmaA: readonly [number, number, number];
-  /** Scattering coefficient (1/mm), RGB — drives cheap single-scatter SSS. */
+  /** Scattering coefficient (1/mm), RGB — keep low for clear glass. */
   readonly sigmaS: readonly [number, number, number];
-  /**
-   * Fresnel rim / edge glow strength (glass neon edges).
-   * Default 1 when omitted.
-   */
+  /** Fresnel rim strength (glass edge). Default 1. */
   readonly rimBoost?: number;
-  /**
-   * Specular highlight gain. Glass wants >1; soft plastic <1.
-   * Default 1 when omitted.
-   */
+  /** Specular / env reflection gain. Default 1. */
   readonly specularBoost?: number;
-  /**
-   * Procedural volume swirl amount in [0, 1] (density variation).
-   * Default 0 when omitted.
-   */
+  /** Procedural volume swirl amount in [0, 1]. Default 0. */
   readonly swirl?: number;
+  /**
+   * Fine material flecks suspended through the volume [0, 1].
+   * Even bulk distribution; not surface dirt. Default 0.
+   */
+  readonly speckDensity?: number;
 }
 
-/** Resolve optional display gains with defaults. */
 export function materialRimBoost(m: FieldMaterial): number {
   return m.rimBoost ?? 1;
 }
@@ -50,46 +44,49 @@ export function materialSwirl(m: FieldMaterial): number {
   return m.swirl ?? 0;
 }
 
+export function materialSpeckDensity(m: FieldMaterial): number {
+  return m.speckDensity ?? 0;
+}
+
 /**
- * Cyan glass-resin — cube slot (mat weight 0).
- * Tuned toward refs/mat_ref_01.jpg: deep blue interior, neon Fresnel edges.
- * Low extinction so a 100 mm slab still reads as see-through glass.
+ * Cyan glass-resin — cube (mat weight 0).
+ * Super clear sapphire with fine volume specks.
  */
 export const MAT_CYAN_RESIN: FieldMaterial = {
   id: "cyan_resin",
   label: "Cyan resin",
-  // Deep electric blue (linear); edges push toward cyan-white via rim.
-  baseColor: [0.02, 0.22, 0.95],
-  roughness: 0.04,
+  baseColor: [0.04, 0.28, 0.95],
+  roughness: 0.06,
   metalness: 0,
-  transmission: 0.99,
+  transmission: 0.97,
   ior: 1.52,
-  // Stronger R/G absorb → deep blue body; B nearly free for glow.
-  sigmaA: [0.04, 0.016, 0.002],
-  sigmaS: [0.012, 0.025, 0.045],
-  rimBoost: 4.0,
-  specularBoost: 2.5,
-  swirl: 0.06,
+  sigmaA: [0.01, 0.004, 0.0012],
+  sigmaS: [0.004, 0.008, 0.014],
+  rimBoost: 1.4,
+  specularBoost: 0.75,
+  swirl: 0.04,
+  // Fine flecks through the bulk (clear glass with inclusions).
+  speckDensity: 0.45,
 };
 
 /**
- * Amber glass-resin — sphere slot (mat weight 1).
- * Tuned toward refs/mat_ref_01.jpg: molten amber volume, bright specular.
+ * Amber glass-resin — sphere (mat weight 1).
+ * Clear molten amber with fine interior flecks for depth.
  */
 export const MAT_AMBER_RESIN: FieldMaterial = {
   id: "amber_resin",
   label: "Amber resin",
-  baseColor: [1.0, 0.28, 0.015],
-  roughness: 0.05,
+  baseColor: [0.98, 0.32, 0.03],
+  roughness: 0.07,
   metalness: 0,
-  transmission: 0.98,
+  transmission: 0.96,
   ior: 1.52,
-  // Warm absorption + scatter so swirl filaments read as molten amber.
-  sigmaA: [0.003, 0.025, 0.07],
-  sigmaS: [0.08, 0.05, 0.02],
-  rimBoost: 1.4,
-  specularBoost: 2.5,
-  swirl: 1.0,
+  sigmaA: [0.0025, 0.012, 0.036],
+  sigmaS: [0.012, 0.01, 0.006],
+  rimBoost: 1.0,
+  specularBoost: 0.7,
+  swirl: 0.55,
+  speckDensity: 0.55,
 };
 
 /** @deprecated Alias — prefer MAT_CYAN_RESIN. */
@@ -107,15 +104,11 @@ export const MAT_MACHINED_METAL: FieldMaterial = {
   sigmaA: [8, 8, 8],
   sigmaS: [0, 0, 0],
   rimBoost: 0.4,
-  specularBoost: 1.2,
+  specularBoost: 1.0,
   swirl: 0,
+  speckDensity: 0,
 };
 
-/**
- * Leaf id → material-blend weight for the demo tree.
- * 0 = cyan resin (cube), 1 = amber resin (sphere).
- * Smooth-union blends these continuously for a clean color gradient.
- */
 export const DEMO_LEAF_MATERIAL_WEIGHT: Readonly<Record<string, number>> = {
   "demo-cube": 0,
   "demo-sphere": 1,
