@@ -6,10 +6,10 @@
  * - Sphere diameter 100 mm (amber resin), center at +X/+Y/+Z vertex (100,100,100)
  * - smoothUnion (soft-min) → continuous dual-transparent material gradient
  *
- * Display: WebGPU sphere-trace (no marching cubes). Mesh remains export-only.
+ * Display: WebGPU sphere-trace with HDRI studio lighting (no mesh).
  */
 
-import { Mesh } from "three";
+import { Mesh, type Texture } from "three";
 import { demoFieldNode, demoPartDef } from "../document/demoDocument";
 import {
   evaluatedPartToThreeMesh,
@@ -17,35 +17,43 @@ import {
 } from "../eval";
 import type { FieldSolid } from "../sdf";
 import { createFieldRayMarchMesh } from "../render";
+import { DEFAULT_LIBRARY_ENTRY } from "../render/library";
+import type { SceneLook } from "../render/looks";
 
-/** Export / legacy tessellation cell size (mm). Not used for default display. */
 const EXPORT_CELL_MM = 1.5;
 
-/**
- * Build the demo field solid via the evaluator (definition-hash cache).
- * Prefer this over hand-wired primitives so the viewport path matches docs.
- */
 export function createDemoFieldSolid(): FieldSolid {
   const evaluated = getDefaultEvaluator().getField(demoPartDef());
   return evaluated.field;
 }
 
-/**
- * Default viewport solid: FieldNode → WGSL sphere-trace (no mesh).
- */
-export function createDemoSolid(): Mesh {
-  const part = demoPartDef();
-  const { definitionHash } = getDefaultEvaluator().getField(part);
-  return createFieldRayMarchMesh(demoFieldNode(), {
-    name: "demo-cyan-amber-resin",
-    definitionHash,
-  });
+export interface CreateDemoSolidOptions {
+  /** Equirectangular HDR for IBL in the field shader. */
+  readonly envMap?: Texture | null;
+  readonly envIntensity?: number;
+  readonly look?: SceneLook;
 }
 
 /**
- * Tessellate the demo field for export or mesh-backend experiments.
- * Not used by the default viewport path.
+ * Default viewport solid: FieldNode → WGSL sphere-trace (no mesh).
+ * Materials + look from the materials library; pass envMap for real HDRI.
  */
+export function createDemoSolid(options: CreateDemoSolidOptions = {}): Mesh {
+  const part = demoPartDef();
+  const { definitionHash } = getDefaultEvaluator().getField(part);
+  const entry = DEFAULT_LIBRARY_ENTRY;
+  const look = options.look ?? entry.look;
+  return createFieldRayMarchMesh(demoFieldNode(), {
+    name: "demo-cyan-amber-resin",
+    definitionHash,
+    material0: entry.material0,
+    material1: entry.material1,
+    look,
+    envMap: options.envMap,
+    envIntensity: options.envIntensity ?? look.envIntensity,
+  });
+}
+
 export function createDemoMeshSolid(): Mesh {
   const part = demoPartDef();
   const evaluated = getDefaultEvaluator().evaluatePart(part, {

@@ -1,6 +1,8 @@
 import "./styles.css";
 import { demoPartDef } from "./document/demoDocument";
 import { createDemoSolid } from "./demo/createDemoSolid";
+import { DEFAULT_LIBRARY_ENTRY } from "./render/library";
+import { loadStudioEnvironment } from "./render/studioEnv";
 import { BuildTreePanel } from "./ui/BuildTreePanel";
 import { OnscreenConsole } from "./ui/OnscreenConsole";
 import { Viewport } from "./viewport/Viewport";
@@ -52,8 +54,64 @@ async function main(): Promise<void> {
     "build tree (left): construction ops · click row to copy summary",
   );
 
+  const look = DEFAULT_LIBRARY_ENTRY.look;
+  viewport.applyLook(look);
+
+  let envMap = null as Awaited<
+    ReturnType<typeof loadStudioEnvironment>
+  > | null;
   try {
-    const solid = createDemoSolid();
+    envMap = await loadStudioEnvironment(viewport.renderer);
+    viewport.setStudioEnvironment(envMap);
+    // Sync look key/fill with HDR probes for the field mesh uniforms.
+    look; // look is const from library; probes applied via env on mesh
+    screenConsole?.log(
+      `env: HDRI «${envMap.id}» (Z-up rotated, bg blur ${look.backgroundBlurriness}) · IBL ${look.envIntensity}`,
+    );
+  } catch (err) {
+    console.warn("Studio HDRI failed — continuing without IBL", err);
+    screenConsole?.log(
+      `warn: studio HDRI failed — ${String(err)} (using look fallback lights)`,
+    );
+  }
+
+  try {
+    const solid = createDemoSolid({
+      envMap: envMap?.equirect ?? null,
+      envIntensity: look.envIntensity,
+      look: {
+        ...look,
+        // When HDR loaded, push extracted probe colors into look-shaped dirs
+        // so mesh uniforms match the scene lights.
+        ...(envMap
+          ? {
+              keyDir: [
+                envMap.keyDir.x,
+                envMap.keyDir.y,
+                envMap.keyDir.z,
+              ] as const,
+              keyColor: [
+                envMap.keyColor.x,
+                envMap.keyColor.y,
+                envMap.keyColor.z,
+              ] as const,
+              fillDir: [
+                envMap.fillDir.x,
+                envMap.fillDir.y,
+                envMap.fillDir.z,
+              ] as const,
+              fillColor: [
+                envMap.fillColor.x,
+                envMap.fillColor.y,
+                envMap.fillColor.z,
+              ] as const,
+            }
+          : {}),
+      },
+    });
+    screenConsole?.log(
+      `look-dev: «${DEFAULT_LIBRARY_ENTRY.id}» — ${DEFAULT_LIBRARY_ENTRY.label}`,
+    );
     viewport.setContent(solid);
     const hash = solid.userData.definitionHash as string | undefined;
     if (hash) {

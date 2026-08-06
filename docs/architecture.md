@@ -73,13 +73,14 @@ Everything that permanently changes the design must land as **durable operations
               ▼                                   │
 ┌───────────────────────────┐                     │
 │ WebGPU sphere-trace display│                    │
-│  FieldNode → WGSL · pick  │                     │
+│  FieldNode → WGSL · mats  │                     │
+│  materials library (refs/)│                     │
 └─────────────┬─────────────┘                     │
               ▼                                   │
 ┌───────────────────────────┐                     │
 │ Scene / Viewport          │◄────────────────────┘
-│  inspect · isolate ·      │
-│  highlight check hotspots │
+│  inspect · scene looks    │
+│  grid / lights from look  │
 └─────────────┬─────────────┘
               ▼
          Export (STL / 3MF / glTF)  ← mesh derivatives only

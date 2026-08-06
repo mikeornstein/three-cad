@@ -4,17 +4,24 @@ import {
   Box3,
   Color,
   DirectionalLight,
+  EquirectangularReflectionMapping,
   GridHelper,
   Group,
   LineSegments,
   Mesh,
   type Object3D,
+  type Texture,
   PerspectiveCamera,
   Scene,
   Vector3,
 } from "three";
 import { WebGPURenderer } from "three/webgpu";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import {
+  DEFAULT_LOOK,
+  type SceneLook,
+} from "../render/looks";
+import type { StudioEnvironment } from "../render/studioEnv";
 
 /** World units are millimeters. Right-handed, Z-up. */
 export const MM = 1;
@@ -30,14 +37,16 @@ export class Viewport {
   private animationId = 0;
   private disposed = false;
   private initialized = false;
+  private look: SceneLook = DEFAULT_LOOK;
+  private grid: GridHelper | null = null;
+  private axes: AxesHelper | null = null;
+  private studioEnv: StudioEnvironment | null = null;
 
-  /** Rolling FPS readout (updates ~2×/s). */
   private readonly fpsEl: HTMLElement;
   private fpsFrames = 0;
   private fpsWindowStart = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
-    this.scene.background = new Color(0x1a1c1e);
     this.scene.add(this.root);
     this.root.add(this.content);
 
@@ -46,12 +55,9 @@ export class Viewport {
 
     this.renderer = new WebGPURenderer({
       canvas,
-      // MSAA is expensive with full-screen field shading.
       antialias: false,
       alpha: false,
     });
-    // Cap DPR hard — field volume cost scales with pixel count.
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
 
     this.controls = new OrbitControls(this.camera, this.canvas);
     this.controls.enableDamping = true;
@@ -61,17 +67,139 @@ export class Viewport {
     this.fpsEl =
       document.getElementById("fps-meter") ?? ensureFpsElement(canvas);
 
-    this.addLights();
-    this.addScaleCues();
+    this.applyLook(DEFAULT_LOOK);
     this.onResize();
     window.addEventListener("resize", this.onResize);
   }
 
+  getSceneLook(): SceneLook {
+    return this.look;
+  }
+
+  getStudioEnvironment(): StudioEnvironment | null {
+    return this.studioEnv;
+  }
+
   /**
-   * Acquire the WebGPU device. Must be awaited before the render loop
-   * (and before any scene that needs GPU resources) is useful.
-   * Throws if WebGPU is unavailable or init fails.
+   * Bind a real studio HDRI: scene background + environment PMREM, and
+   * replace key/fill DirectionalLights with probes extracted from the map.
    */
+  setStudioEnvironment(env: StudioEnvironment | null): void {
+    if (this.studioEnv && this.studioEnv !== env) {
+      // Caller owns dispose timing; do not auto-dispose shared env.
+    }
+    this.studioEnv = env;
+    this.applyEnvironmentToScene();
+    this.rebuildLights();
+  }
+
+  applyLook(look: SceneLook): void {
+    this.look = look;
+    this.renderer.setPixelRatio(
+      Math.min(window.devicePixelRatio, look.maxPixelRatio),
+    );
+    this.applyEnvironmentToScene();
+    this.rebuildLights();
+    this.rebuildScaleCues();
+  }
+
+  private applyEnvironmentToScene(): void {
+    const look = this.look;
+    if (this.studioEnv) {
+      const eq = this.studioEnv.equirect;
+      eq.mapping = EquirectangularReflectionMapping;
+      // Real HDRI: dim + heavy blur so the sky does not compete with the model.
+      // Full-res equirect is still sampled in the field shader for sharp IBL.
+      this.scene.background = eq;
+      this.scene.backgroundIntensity = look.backgroundIntensity;
+      this.scene.backgroundBlurriness = look.backgroundBlurriness;
+      this.scene.environment = this.studioEnv.pmrem;
+      this.scene.environmentIntensity = look.envIntensity;
+      // HDR equirects are Y-up; three-cad is Z-up. Rx(+90°) maps HDR +Y (ceiling)
+      // onto world +Z right-side up (Rx(−90°) left the studio inverted).
+      this.scene.backgroundRotation.set(Math.PI / 2, 0, 0);
+      this.scene.environmentRotation.set(Math.PI / 2, 0, 0);
+    } else {
+      this.scene.background = new Color(look.background);
+      this.scene.backgroundIntensity = 1;
+      this.scene.backgroundBlurriness = 0;
+      this.scene.environment = null;
+      this.scene.environmentIntensity = 1;
+      this.scene.backgroundRotation.set(0, 0, 0);
+      this.scene.environmentRotation.set(0, 0, 0);
+      this.renderer.setClearColor(look.background, 1);
+    }
+  }
+
+  private rebuildLights(): void {
+    const toRemove: Object3D[] = [];
+    for (const child of this.root.children) {
+      if (
+        child instanceof AmbientLight ||
+        child instanceof DirectionalLight
+      ) {
+        toRemove.push(child);
+      }
+    }
+    for (const c of toRemove) {
+      this.root.remove(c);
+      if ("dispose" in c && typeof c.dispose === "function") {
+        (c as { dispose: () => void }).dispose();
+      }
+    }
+
+    const look = this.look;
+    const ambI =
+      (look.ambient[0] + look.ambient[1] + look.ambient[2]) / 3;
+    const ambient = new AmbientLight(0xffffff, Math.max(ambI * 1.2, 0.05));
+
+    // Prefer HDR-extracted probes when available.
+    let keyDir = new Vector3(look.keyDir[0], look.keyDir[1], look.keyDir[2]);
+    let keyCol = new Color(look.keyColor[0], look.keyColor[1], look.keyColor[2]);
+    let fillDir = new Vector3(
+      look.fillDir[0],
+      look.fillDir[1],
+      look.fillDir[2],
+    );
+    let fillCol = new Color(
+      look.fillColor[0],
+      look.fillColor[1],
+      look.fillColor[2],
+    );
+
+    if (this.studioEnv) {
+      keyDir = this.studioEnv.keyDir.clone();
+      fillDir = this.studioEnv.fillDir.clone();
+      keyCol = new Color(
+        this.studioEnv.keyColor.x,
+        this.studioEnv.keyColor.y,
+        this.studioEnv.keyColor.z,
+      );
+      fillCol = new Color(
+        this.studioEnv.fillColor.x,
+        this.studioEnv.fillColor.y,
+        this.studioEnv.fillColor.z,
+      );
+    }
+
+    const key = new DirectionalLight(
+      keyCol.getHex(),
+      Math.max(keyCol.r, keyCol.g, keyCol.b, 0.2),
+    );
+    key.position.copy(keyDir).multiplyScalar(500);
+    const fill = new DirectionalLight(
+      fillCol.getHex(),
+      Math.max(fillCol.r, fillCol.g, fillCol.b, 0.1) * 0.8,
+    );
+    fill.position.copy(fillDir).multiplyScalar(400);
+    const rim = new DirectionalLight(
+      rgbToHex(look.rimColor),
+      intensityOf(look.rimColor) * 0.4,
+    );
+    rim.position.set(look.rimDir[0], look.rimDir[1], look.rimDir[2]);
+    this.root.add(ambient, key, fill, rim);
+  }
+
   async init(): Promise<void> {
     if (this.initialized) return;
     if (typeof navigator === "undefined" || !navigator.gpu) {
@@ -80,7 +208,6 @@ export class Viewport {
       );
     }
     await this.renderer.init();
-    // Product decision: WebGPU only — no silent WebGL2 fallback for field display.
     const backend = this.renderer.backend as { isWebGPUBackend?: boolean };
     if (backend.isWebGPUBackend !== true) {
       this.renderer.dispose();
@@ -92,10 +219,10 @@ export class Viewport {
     this.loop();
   }
 
-  /** Replace scene content (demo solid, later evaluated geometry). */
   setContent(object: Object3D): void {
     this.clearGroup(this.content);
     this.content.add(object);
+    object.renderOrder = 10;
     this.frameObject(object);
   }
 
@@ -107,7 +234,6 @@ export class Viewport {
 
     this.controls.target.copy(center);
 
-    // Isometric-ish view for Z-up mechanical inspection.
     const distance =
       (radius / Math.tan((this.camera.fov * Math.PI) / 360)) * 1.35;
     const dir = new Vector3(1, -1.15, 0.85).normalize();
@@ -136,26 +262,42 @@ export class Viewport {
     }
   }
 
-  private addLights(): void {
-    const ambient = new AmbientLight(0xffffff, 0.55);
-    const key = new DirectionalLight(0xffffff, 0.95);
-    key.position.set(200, -120, 280);
-    const fill = new DirectionalLight(0xb0c4de, 0.4);
-    fill.position.set(-180, 100, 80);
-    this.root.add(ambient, key, fill);
-  }
+  private rebuildScaleCues(): void {
+    if (this.grid) {
+      this.root.remove(this.grid);
+      this.grid.geometry.dispose();
+      const gMat = this.grid.material;
+      if (Array.isArray(gMat)) gMat.forEach((m) => m.dispose());
+      else gMat.dispose();
+      this.grid = null;
+    }
+    if (this.axes) {
+      this.root.remove(this.axes);
+      this.axes.geometry.dispose();
+      const aMat = this.axes.material;
+      if (Array.isArray(aMat)) aMat.forEach((m) => m.dispose());
+      else (aMat as { dispose?: () => void }).dispose?.();
+      this.axes = null;
+    }
 
-  private addScaleCues(): void {
-    // GridHelper is XZ by default (Y-up). Rotate into XY so Z is up.
     const gridSize = 400 * MM;
-    const divisions = 40; // 10 mm cells
-    const grid = new GridHelper(gridSize, divisions, 0x5a6570, 0x2e343a);
+    const divisions = 40;
+    const grid = new GridHelper(
+      gridSize,
+      divisions,
+      this.look.gridCenter,
+      this.look.gridLine,
+    );
     grid.rotation.x = Math.PI / 2;
     grid.position.z = 0;
+    grid.renderOrder = -20;
     this.root.add(grid);
+    this.grid = grid;
 
     const axes = new AxesHelper(80 * MM);
+    axes.renderOrder = -19;
     this.root.add(axes);
+    this.axes = axes;
   }
 
   private readonly onResize = (): void => {
@@ -163,6 +305,9 @@ export class Viewport {
     const height = this.canvas.clientHeight || window.innerHeight;
     this.camera.aspect = width / Math.max(height, 1);
     this.camera.updateProjectionMatrix();
+    this.renderer.setPixelRatio(
+      Math.min(window.devicePixelRatio, this.look.maxPixelRatio),
+    );
     this.renderer.setSize(width, height, false);
   };
 
@@ -171,7 +316,6 @@ export class Viewport {
     this.animationId = requestAnimationFrame(this.loop);
     this.controls.update();
     this.camera.updateMatrixWorld();
-    // Field solids use TSL camera built-ins; no per-mesh uniform sync.
     this.renderer.render(this.scene, this.camera);
     this.tickFps();
   };
@@ -195,7 +339,6 @@ export class Viewport {
   }
 }
 
-/** Corner FPS badge next to the canvas (created once). */
 function ensureFpsElement(canvas: HTMLCanvasElement): HTMLElement {
   const existing = document.getElementById("fps-meter");
   if (existing) return existing;
@@ -220,3 +363,18 @@ function disposeObject(object: Object3D): void {
     }
   });
 }
+
+function intensityOf(rgb: readonly [number, number, number]): number {
+  return Math.max(rgb[0], rgb[1], rgb[2], 0.01);
+}
+
+function rgbToHex(rgb: readonly [number, number, number]): number {
+  const s = intensityOf(rgb);
+  const r = Math.min(1, rgb[0] / s);
+  const g = Math.min(1, rgb[1] / s);
+  const b = Math.min(1, rgb[2] / s);
+  return new Color(r, g, b).getHex();
+}
+
+/** Re-export for callers that need the Texture type. */
+export type { Texture };

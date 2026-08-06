@@ -16,8 +16,30 @@ export {
   MAT_CYAN_RESIN,
   MAT_MACHINED_METAL,
   MAT_TINTED_RESIN,
+  materialRimBoost,
+  materialSpeckDensity,
+  materialSpecularBoost,
+  materialSwirl,
   type FieldMaterial,
 } from "./materials";
+export {
+  DEFAULT_LOOK,
+  LOOK_INSPECT,
+  LOOK_MAT_REF_01,
+  type SceneLook,
+} from "./looks";
+export {
+  DEFAULT_LIBRARY_ENTRY,
+  getLibraryEntry,
+  MATERIAL_LIBRARY,
+  type MaterialLookEntry,
+} from "./library";
+export {
+  DEFAULT_HDR_ID,
+  loadStudioEnvironment,
+  zUpDirectionToYUp,
+  type StudioEnvironment,
+} from "./studioEnv";
 export {
   createFieldRayMarchMesh,
   isRayMarchMesh,

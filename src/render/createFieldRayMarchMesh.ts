@@ -2,22 +2,24 @@
  * Build a Three.js Mesh that sphere-traces a FieldNode inside its AABB
  * via WebGPU / WGSL (MeshBasicNodeMaterial + TSL).
  *
- * Multi-material: leaf weights blend continuously through smooth-union.
- * Demo defaults: cyan resin cube + amber resin sphere (dual transparent gradient).
+ * Lighting: real equirectangular HDRI (studioEnv) sampled for reflections,
+ * volume irradiance, and transmission — not painted fake grids/lights.
  *
- * Performance: depth = sphere-trace only; volume uses few adaptive steps and a
- * free SDF thickness proxy (no nested light rays). Target ≥20 FPS.
- *
- * WGSL layout: shared helper FunctionNode included by both shade + depth entry
- * points so Three.js does not redeclare sampleField / sdBox / etc.
+ * Transparency: residual transmittance T → mesh alpha so the real scene
+ * GridHelper composites through the solid.
  */
 
 import {
   BoxGeometry,
   Color,
-  DoubleSide,
+  DataTexture,
+  FrontSide,
+  LinearFilter,
   Mesh,
+  RGBAFormat,
+  FloatType,
   Vector3,
+  type Texture,
 } from "three";
 import type { Node } from "three/webgpu";
 import { MeshBasicNodeMaterial } from "three/webgpu";
@@ -32,6 +34,7 @@ import {
   float,
   normalize,
   positionWorld,
+  texture,
   uniform,
   vec3,
   vec4,
@@ -40,10 +43,15 @@ import {
 } from "three/tsl";
 import type { FieldNode } from "../document/fieldDef";
 import { fieldNodeToWgsl } from "./fieldToWgsl";
+import { DEFAULT_LOOK, type SceneLook } from "./looks";
 import {
   DEMO_LEAF_MATERIAL_WEIGHT,
   MAT_AMBER_RESIN,
   MAT_CYAN_RESIN,
+  materialRimBoost,
+  materialSpeckDensity,
+  materialSpecularBoost,
+  materialSwirl,
   type FieldMaterial,
 } from "./materials";
 
@@ -55,26 +63,44 @@ export interface FieldRayMarchOptions {
   /** @deprecated Prefer material slots; kept as material-0 tint override. */
   readonly color?: number;
   readonly definitionHash?: string;
-  /** Pad AABB (mm) so sphere-trace does not clip the surface. Default 1. */
   readonly padMm?: number;
-  /** Max sphere-trace steps. Default 64. */
   readonly maxSteps?: number;
-  /** Surface hit epsilon (mm). Default 0.05. */
   readonly surfaceEpsMm?: number;
-  /** Material weight 0 slot (demo cube / cyan resin). */
   readonly material0?: FieldMaterial;
-  /** Material weight 1 slot (demo sphere / amber resin). */
   readonly material1?: FieldMaterial;
-  /** leafId → weight in [0,1] for matWeight(). */
   readonly leafMaterialWeight?: Readonly<Record<string, number>>;
+  readonly look?: SceneLook;
+  /**
+   * Equirectangular HDR (linear). Sampled for IBL / reflections / transmission.
+   * Prefer studioEnv.equirect from loadStudioEnvironment().
+   */
+  readonly envMap?: Texture | null;
+  /** Multiplier on HDR samples. Default from look.envIntensity or 1. */
+  readonly envIntensity?: number;
 }
 
 export interface FieldRayMarchMesh extends Mesh {
   material: MeshBasicNodeMaterial;
 }
 
+/** 1×1 black float texture so the shader always has a valid env binding. */
+let fallbackEnv: DataTexture | null = null;
+function getFallbackEnv(): DataTexture {
+  if (fallbackEnv) return fallbackEnv;
+  const data = new Float32Array([0, 0, 0, 1]);
+  fallbackEnv = new DataTexture(data, 1, 1, RGBAFormat, FloatType);
+  fallbackEnv.magFilter = LinearFilter;
+  fallbackEnv.minFilter = LinearFilter;
+  fallbackEnv.needsUpdate = true;
+  return fallbackEnv;
+}
+
 function colorFromRgb(rgb: readonly [number, number, number]): Color {
   return new Color(rgb[0], rgb[1], rgb[2]);
+}
+
+function vecFromTuple(t: readonly [number, number, number]): Vector3 {
+  return new Vector3(t[0], t[1], t[2]);
 }
 
 /**
@@ -87,6 +113,10 @@ export function createFieldRayMarchMesh(
   const leafWeights = options.leafMaterialWeight ?? DEMO_LEAF_MATERIAL_WEIGHT;
   const mat0 = options.material0 ?? MAT_CYAN_RESIN;
   const mat1 = options.material1 ?? MAT_AMBER_RESIN;
+  const look = options.look ?? DEFAULT_LOOK;
+  const envMap = options.envMap ?? getFallbackEnv();
+  const envIntensity =
+    options.envIntensity ?? look.envIntensity ?? 1.0;
 
   const compiled = fieldNodeToWgsl(fieldNode, {
     leafMaterialWeight: leafWeights,
@@ -111,15 +141,22 @@ export function createFieldRayMarchMesh(
   const uBoundsMax = uniform(
     new Vector3(max[0] + pad, max[1] + pad, max[2] + pad),
   );
-  const uAmbient = uniform(new Color(0xffffff).multiplyScalar(0.32));
-  const uKeyDir = uniform(new Vector3(200, -120, 280).normalize());
-  const uKeyColor = uniform(new Color(0xffffff).multiplyScalar(1.1));
-  const uFillDir = uniform(new Vector3(-180, 100, 80).normalize());
-  const uFillColor = uniform(new Color(0xb0c4de).multiplyScalar(0.32));
-  const uBg = uniform(new Color(0x1a1c1e));
-  const uMaxSteps = uniform(float(options.maxSteps ?? 64));
-  const uSurfaceEps = uniform(float(options.surfaceEpsMm ?? 0.08));
-  const uNormalEps = uniform(float(0.15));
+  const uAmbient = uniform(colorFromRgb(look.ambient));
+  const uKeyDir = uniform(vecFromTuple(look.keyDir).normalize());
+  const uKeyColor = uniform(colorFromRgb(look.keyColor));
+  const uFillDir = uniform(vecFromTuple(look.fillDir).normalize());
+  const uFillColor = uniform(colorFromRgb(look.fillColor));
+  const uRimDir = uniform(vecFromTuple(look.rimDir).normalize());
+  const uRimColor = uniform(colorFromRgb(look.rimColor));
+  const uBg = uniform(new Color(look.background));
+  const uEnvIntensity = uniform(float(envIntensity));
+  const uMaxSteps = uniform(
+    float(options.maxSteps ?? look.maxSteps ?? 80),
+  );
+  const uSurfaceEps = uniform(
+    float(options.surfaceEpsMm ?? look.surfaceEpsMm ?? 0.06),
+  );
+  const uNormalEps = uniform(float(0.12));
 
   const uM0Color = uniform(
     options.color !== undefined
@@ -136,6 +173,10 @@ export function createFieldRayMarchMesh(
   const uM0SigmaS = uniform(
     vec3(mat0.sigmaS[0], mat0.sigmaS[1], mat0.sigmaS[2]),
   );
+  const uM0Rim = uniform(float(materialRimBoost(mat0)));
+  const uM0Spec = uniform(float(materialSpecularBoost(mat0)));
+  const uM0Swirl = uniform(float(materialSwirl(mat0)));
+  const uM0Speck = uniform(float(materialSpeckDensity(mat0)));
 
   const uM1Color = uniform(colorFromRgb(mat1.baseColor));
   const uM1Rough = uniform(float(mat1.roughness));
@@ -148,8 +189,14 @@ export function createFieldRayMarchMesh(
   const uM1SigmaS = uniform(
     vec3(mat1.sigmaS[0], mat1.sigmaS[1], mat1.sigmaS[2]),
   );
+  const uM1Rim = uniform(float(materialRimBoost(mat1)));
+  const uM1Spec = uniform(float(materialSpecularBoost(mat1)));
+  const uM1Swirl = uniform(float(materialSwirl(mat1)));
+  const uM1Speck = uniform(float(materialSpeckDensity(mat1)));
 
-  // Shared WGSL library — first fn is the include "entry"; callers use helpers by name.
+  // TSL texture node → WGSL texture_2d (textureLoad, no separate sampler needed).
+  const envMapNode = texture(envMap);
+
   const fieldLib = wgslFn(`
 fn fieldLibPing() -> f32 { return 0.0; }
 
@@ -181,7 +228,7 @@ fn sphereTrace(
   let tFar = aabb.y;
   let stepScale = 0.9;
   let maxS = i32(maxSteps);
-  for (var i = 0; i < 80; i++) {
+  for (var i = 0; i < 96; i++) {
     if (i >= maxS) { break; }
     if (t > tFar) { break; }
     let p = ro + rd * t;
@@ -194,7 +241,6 @@ fn sphereTrace(
   return -1.0;
 }
 
-/** Tetrahedral gradient — 4 field samples instead of 6. */
 fn calcNormal(p: vec3<f32>, normalEps: f32) -> vec3<f32> {
   let e = normalEps;
   let k0 = vec3<f32>(1.0, -1.0, -1.0);
@@ -213,6 +259,143 @@ fn fresnelSchlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
   return F0 + (vec3<f32>(1.0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
+fn hash31(p: vec3<f32>) -> f32 {
+  var p3 = fract(p * 0.1031);
+  p3 = p3 + dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+fn valueNoise3(p: vec3<f32>) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+  let n000 = hash31(i + vec3<f32>(0.0, 0.0, 0.0));
+  let n100 = hash31(i + vec3<f32>(1.0, 0.0, 0.0));
+  let n010 = hash31(i + vec3<f32>(0.0, 1.0, 0.0));
+  let n110 = hash31(i + vec3<f32>(1.0, 1.0, 0.0));
+  let n001 = hash31(i + vec3<f32>(0.0, 0.0, 1.0));
+  let n101 = hash31(i + vec3<f32>(1.0, 0.0, 1.0));
+  let n011 = hash31(i + vec3<f32>(0.0, 1.0, 1.0));
+  let n111 = hash31(i + vec3<f32>(1.0, 1.0, 1.0));
+  let nx00 = mix(n000, n100, u.x);
+  let nx10 = mix(n010, n110, u.x);
+  let nx01 = mix(n001, n101, u.x);
+  let nx11 = mix(n011, n111, u.x);
+  let nxy0 = mix(nx00, nx10, u.y);
+  let nxy1 = mix(nx01, nx11, u.y);
+  return mix(nxy0, nxy1, u.z);
+}
+
+fn volumeSwirl(p: vec3<f32>, amount: f32) -> f32 {
+  if (amount < 0.001) {
+    return 1.0;
+  }
+  let q = p * 0.028;
+  let n1 = valueNoise3(q);
+  let warped = q + vec3<f32>(n1 * 3.2, n1 * -2.4, n1 * 2.0);
+  let n2 = valueNoise3(warped * 1.55 + vec3<f32>(3.1, 1.7, 9.2));
+  let n3 = valueNoise3(warped * 2.8 + vec3<f32>(n2 * 2.5, 4.2, 0.5));
+  let n4 = valueNoise3(warped.yzx * 4.5 + vec3<f32>(1.2, n3, 7.7));
+  let raw = n2 * 0.55 + n3 * 0.3 + n4 * 0.2;
+  let bands = smoothstep(0.25, 0.85, raw);
+  let swirl = mix(0.2, 2.15, bands);
+  return mix(1.0, swirl, amount);
+}
+
+/**
+ * Fine, hard flecks suspended evenly through the volume (not surface dirt).
+ * One particle per occupied cell; sharp radial falloff for defined grains.
+ * Returns strength in [0,1].
+ */
+fn volumeSpecks(p: vec3<f32>, density: f32) -> f32 {
+  if (density < 0.001) {
+    return 0.0;
+  }
+  // Fine grain ~2 mm cells; occupancy scales with density.
+  let cell = 2.15;
+  let g = floor(p / cell);
+  let f = fract(p / cell) - vec3<f32>(0.5);
+  let seed = hash31(g + vec3<f32>(17.1, 9.3, 3.7));
+  // density 1 → ~18% cells occupied — even field of small flecks.
+  let thresh = 1.0 - density * 0.18;
+  if (seed < thresh) {
+    return 0.0;
+  }
+  // Jitter center inside cell.
+  let ox = hash31(g + vec3<f32>(1.3, 4.7, 2.1)) - 0.5;
+  let oy = hash31(g + vec3<f32>(8.2, 1.9, 5.5)) - 0.5;
+  let oz = hash31(g + vec3<f32>(3.4, 6.6, 0.8)) - 0.5;
+  let local = f - vec3<f32>(ox, oy, oz) * 0.35;
+  let r = length(local);
+  // Radius ~0.12–0.22 cell units (~0.25–0.5 mm) — fine, defined grain.
+  let rad = 0.11 + 0.1 * hash31(g + vec3<f32>(0.7, 2.2, 9.1));
+  // Hard-ish disc with slight soft edge (not a haze blob, not a sparkle).
+  return 1.0 - smoothstep(rad * 0.55, rad, r);
+}
+
+/**
+ * Z-up world → Y-up equirect space.
+ * Matches Scene.backgroundRotation / environmentRotation of Rx(+90°):
+ *   (x, y, z)_zup → (x, −z, y)_yup so world +Z (ceiling) = HDR +Y, right-side up.
+ */
+fn zUpToYUp(d: vec3<f32>) -> vec3<f32> {
+  return normalize(vec3<f32>(d.x, -d.z, d.y));
+}
+
+/**
+ * Bilinear equirectangular HDR sample via textureLoad (no sampler required).
+ * dir is Z-up world space.
+ */
+fn sampleHDR(
+  map: texture_2d<f32>,
+  dirZup: vec3<f32>,
+  intensity: f32
+) -> vec3<f32> {
+  let d = zUpToYUp(dirZup);
+  let u = atan2(d.z, d.x) * 0.15915494309189535 + 0.5;
+  let v = 1.0 - (asin(clamp(d.y, -1.0, 1.0)) * 0.3183098861837907 + 0.5);
+  let dims = vec2<f32>(textureDimensions(map));
+  let coord = vec2<f32>(u, v) * dims - vec2<f32>(0.5);
+  let i0 = vec2<i32>(floor(coord));
+  let f = fract(coord);
+  let maxC = vec2<i32>(textureDimensions(map)) - vec2<i32>(1);
+  let p00 = clamp(i0, vec2<i32>(0), maxC);
+  let p10 = clamp(i0 + vec2<i32>(1, 0), vec2<i32>(0), maxC);
+  let p01 = clamp(i0 + vec2<i32>(0, 1), vec2<i32>(0), maxC);
+  let p11 = clamp(i0 + vec2<i32>(1, 1), vec2<i32>(0), maxC);
+  let c00 = textureLoad(map, p00, 0).rgb;
+  let c10 = textureLoad(map, p10, 0).rgb;
+  let c01 = textureLoad(map, p01, 0).rgb;
+  let c11 = textureLoad(map, p11, 0).rgb;
+  let c0 = mix(c00, c10, f.x);
+  let c1 = mix(c01, c11, f.x);
+  let c = mix(c0, c1, f.y);
+  return max(c, vec3<f32>(0.0)) * intensity;
+}
+
+/** Cheap blur: average a few offsets for rough specular / diffuse IBL. */
+fn sampleHDRBlur(
+  map: texture_2d<f32>,
+  dirZup: vec3<f32>,
+  intensity: f32,
+  spread: f32
+) -> vec3<f32> {
+  let d = normalize(dirZup);
+  var acc = sampleHDR(map, d, intensity);
+  acc = acc + sampleHDR(map, normalize(d + vec3<f32>(spread, 0.0, 0.0)), intensity);
+  acc = acc + sampleHDR(map, normalize(d + vec3<f32>(-spread, 0.0, 0.0)), intensity);
+  acc = acc + sampleHDR(map, normalize(d + vec3<f32>(0.0, spread, 0.0)), intensity);
+  acc = acc + sampleHDR(map, normalize(d + vec3<f32>(0.0, -spread, 0.0)), intensity);
+  acc = acc + sampleHDR(map, normalize(d + vec3<f32>(0.0, 0.0, spread)), intensity);
+  return acc * (1.0 / 6.0);
+}
+
+fn tonemap(c: vec3<f32>) -> vec3<f32> {
+  let x = max(c, vec3<f32>(0.0));
+  // Reinhard-ish — preserves color, kills HDR white blowout.
+  return x / (x + vec3<f32>(0.85));
+}
+
 ${compiled.mapSource}
 `);
 
@@ -228,7 +411,10 @@ fn shadeField(
   keyColor: vec3<f32>,
   fillDir: vec3<f32>,
   fillColor: vec3<f32>,
+  rimDir: vec3<f32>,
+  rimColor: vec3<f32>,
   bg: vec3<f32>,
+  envIntensity: f32,
   maxSteps: f32,
   surfaceEps: f32,
   normalEps: f32,
@@ -239,13 +425,22 @@ fn shadeField(
   m0Ior: f32,
   m0SigmaA: vec3<f32>,
   m0SigmaS: vec3<f32>,
+  m0Rim: f32,
+  m0Spec: f32,
+  m0Swirl: f32,
+  m0Speck: f32,
   m1Color: vec3<f32>,
   m1Rough: f32,
   m1Metal: f32,
   m1Trans: f32,
   m1Ior: f32,
   m1SigmaA: vec3<f32>,
-  m1SigmaS: vec3<f32>
+  m1SigmaS: vec3<f32>,
+  m1Rim: f32,
+  m1Spec: f32,
+  m1Swirl: f32,
+  m1Speck: f32,
+  envMap: texture_2d<f32>
 ) -> vec4<f32> {
   let ro = cameraPos;
   let rd = normalize(worldPos - cameraPos);
@@ -264,39 +459,62 @@ fn shadeField(
   let roughness = mix(m0Rough, m1Rough, mw);
   let metalness = mix(m0Metal, m1Metal, mw);
   let transmission = mix(m0Trans, m1Trans, mw);
+  let rimBoost = mix(m0Rim, m1Rim, mw);
+  let specBoost = mix(m0Spec, m1Spec, mw);
 
   let v = -rd;
   let nDotV = max(dot(n, v), 0.0);
-  let F0 = mix(vec3<f32>(0.04), baseColor, metalness);
+  let ior = mix(m0Ior, m1Ior, mw);
+  let f0d = pow((ior - 1.0) / (ior + 1.0), 2.0);
+  let F0 = mix(vec3<f32>(f0d), baseColor, metalness);
   let F = fresnelSchlick(nDotV, F0);
+
+  // --- Real IBL from HDR equirect ---
+  let R = reflect(rd, n);
+  let envSpread = mix(0.03, 0.2, roughness);
+  let envSpec = sampleHDRBlur(envMap, R, envIntensity * 0.85, envSpread);
+  let envDiff = sampleHDRBlur(envMap, n, envIntensity * 0.3, 0.4);
+  let refrDir = refract(rd, n, 1.0 / ior);
+  let thruDir = select(rd, normalize(refrDir), length(refrDir) > 0.01);
+  let envThru = sampleHDR(envMap, thruDir, envIntensity * 0.5);
 
   let kDir = normalize(keyDir);
   let fDir = normalize(fillDir);
-  let hKey = normalize(kDir + v);
-  let specPow = mix(56.0, 10.0, roughness);
-  let specKey = pow(max(dot(n, hKey), 0.0), specPow) * keyColor;
+  let rDir = normalize(rimDir);
   let ndlKey = max(dot(n, kDir), 0.0);
   let ndlFill = max(dot(n, fDir), 0.0);
+  let ndlRim = max(dot(n, rDir), 0.0);
+  let hKey = normalize(kDir + v);
+  let specPow = mix(120.0, 24.0, roughness);
+  let specKey = pow(max(dot(n, hKey), 0.0), specPow) * keyColor;
 
   if (metalness > 0.7 && transmission < 0.2) {
-    let diff = baseColor * (ambient + keyColor * ndlKey + fillColor * ndlFill);
-    let lit = mix(diff, baseColor * (specKey * 1.4 + ambient * 0.25 + fillColor * ndlFill * 0.4), metalness);
-    return vec4<f32>(lit + F * specKey * (1.0 - roughness * 0.7), hitT);
+    let diff = baseColor * (ambient + envDiff * 0.8 + keyColor * ndlKey * 0.35);
+    let lit = mix(diff, baseColor * envSpec * 1.2, metalness);
+    return vec4<f32>(tonemap(lit + F * envSpec * specBoost), 1.0);
   }
 
-  // Soften specular on high-transmission media (less neck bloom).
-  let specAmt = (1.0 - roughness * 0.5) * mix(1.0, 0.22, transmission);
-  let specular = F * specKey * specAmt;
+  // Clear glass specular (moderate, not milky).
+  let specular = F * envSpec * (0.7 * specBoost) + F * specKey * 0.12 * specBoost;
 
-  // Dual-medium volume: few adaptive steps, SDF thickness proxy (no nested rays).
+  let graze = clamp(1.0 - nDotV, 0.0, 1.0);
+  let fresnelRim = pow(graze, 3.0);
+  let edgeCore = pow(graze, 5.2);
+  let rimTint = mix(baseColor * 1.15, vec3<f32>(0.3, 0.75, 1.0), 0.35);
+  let rim = rimTint * (fresnelRim * 0.55 + edgeCore * 1.0) * rimBoost;
+  let rimLight = rimColor * fresnelRim * ndlRim * rimBoost * 0.15;
+
+  // Clear volume + fine flecks evenly through the bulk (not surface dirt).
   var T = vec3<f32>(1.0);
   var Cvol = vec3<f32>(0.0);
-  var p = pos + rd * (surfaceEps * 2.0);
-  let minDs = 1.2;
-  let maxDs = 8.0;
-  let maxPath = 120.0;
+  // Start a bit inside so near-surface samples do not dominate fleck look.
+  var p = pos + rd * (surfaceEps * 4.0);
+  let minDs = 0.45;
+  let maxDs = 2.8;
+  let maxPath = 160.0;
+  var pathLen = 0.0;
 
-  for (var vi = 0; vi < 14; vi++) {
+  for (var vi = 0; vi < 48; vi++) {
     let s = sampleField(p);
     if (s.x > surfaceEps) {
       break;
@@ -306,41 +524,79 @@ fn shadeField(
     let col = mix(m0Color, m1Color, w);
     let sa = mix(m0SigmaA, m1SigmaA, w);
     let ss = mix(m0SigmaS, m1SigmaS, w);
-    let st = sa + ss;
-    let albedo = ss / max(st, vec3<f32>(1e-4));
+    let localSwirl = mix(m0Swirl, m1Swirl, w);
+    let localSpeck = mix(m0Speck, m1Speck, w);
+    let dens = volumeSwirl(p, localSwirl);
+    let saD = sa * mix(1.0, dens, 0.15);
+    let ssD = ss * dens;
+    let st = saD + ssD;
+    let albedo = ssD / max(st, vec3<f32>(1e-4));
 
-    let ds = clamp(max(-s.x, surfaceEps) * 0.65 + minDs * 0.4, minDs, maxDs);
+    // Small fixed-ish steps so fine flecks are hit evenly along the path.
+    let ds = clamp(max(-s.x, surfaceEps) * 0.25 + minDs * 0.55, minDs, maxDs);
 
-    // Local thickness proxy from SDF (≈ distance to surface * 2) — free.
-    let thickL = max(-s.x, 0.5) * 2.0;
-    let lightAtt = exp(-sa * thickL);
-    let Li = keyColor * lightAtt * 0.32 + fillColor * 0.12;
-    let scatter = albedo * Li * col;
+    let depthIn = max(-s.x, 0.0);
+    // Suppress flecks in the outer shell (~1.2 mm) so they read as interior volume.
+    let interior = smoothstep(0.6, 2.2, depthIn);
+
+    let thickL = depthIn * 2.0;
+    let lightAtt = exp(-saD * thickL);
+    let Li =
+      envDiff * lightAtt * 0.7 +
+      keyColor * ndlKey * lightAtt * 0.25 +
+      fillColor * ndlFill * 0.15 +
+      ambient * 0.2;
+    // Host medium stays clear.
+    var scatter = albedo * Li * col * (0.3 + 0.35 * dens);
+
+    // Fine material flecks — opaque-ish grains of the same family of color.
+    let sp = volumeSpecks(p, localSpeck) * interior;
+    if (sp > 0.04) {
+      let tone = hash31(floor(p / 2.15) + vec3<f32>(2.0, 5.0, 1.0));
+      // Slightly lighter or darker grain of the host material (not dirt grey).
+      let fleckCol = col * mix(0.55, 1.15, tone);
+      // Diffuse only — depth from occlusion of Li through thickness, no shimmer.
+      let fleckLit = fleckCol * (Li * 0.9 + ambient * 0.25);
+      // Strong enough to read as solid flecks inside clear glass.
+      scatter = scatter + fleckLit * sp * 1.8;
+      T = T * (1.0 - sp * 0.35);
+    }
 
     let Tr = exp(-st * ds);
     Cvol = Cvol + T * (vec3<f32>(1.0) - Tr) * scatter;
+    // Discrete fleck hit: add a bit of opaque grain independent of continuous media.
+    if (sp > 0.04) {
+      let tone2 = hash31(floor(p / 2.15) + vec3<f32>(9.0, 1.0, 4.0));
+      let grain = col * mix(0.5, 1.1, tone2) * (Li * 0.85 + ambient * 0.2);
+      Cvol = Cvol + T * grain * sp * 0.55;
+    }
     T = T * Tr;
+    pathLen = pathLen + ds;
 
-    if (max(T.x, max(T.y, T.z)) < 0.04) {
+    if (max(T.x, max(T.y, T.z)) < 0.015) {
       break;
     }
     p = p + rd * ds;
-    if (distance(p, pos) > maxPath) {
+    if (pathLen > maxPath) {
       break;
     }
   }
 
-  let surfaceDiff = baseColor * (
-    ambient * 0.35 + keyColor * ndlKey * 0.12 + fillColor * ndlFill * 0.1
-  );
-  // More residual T shows as higher transparency (background bleed).
-  let body = Cvol + T * (surfaceDiff * 0.35 + bg * 0.35);
-  let lit = specular + (vec3<f32>(1.0) - F) * body * (0.2 + 0.8 * transmission);
+  // Clear body: residual transmittance + light volume + flecks already in Cvol.
+  let beer = exp(-mix(m0SigmaA, m1SigmaA, mw) * max(pathLen, 6.0));
+  let bodyTint = baseColor * (0.25 + 0.5 * (1.0 - beer));
+  let thru = T * (envThru * beer * 0.45 + bodyTint * 0.3 + bg * 0.06);
+  let glass = (vec3<f32>(1.0) - F * 0.5) * (Cvol + thru) * mix(0.25, 1.0, transmission);
 
-  return vec4<f32>(lit, hitT);
+  let specAtten = mix(0.45, 1.0, fresnelRim * 0.4 + 0.4);
+  let emit = specular * specAtten + glass + rim + rimLight;
+
+  let Tavg = (T.x + T.y + T.z) * (1.0 / 3.0);
+  let alpha = clamp(1.0 - Tavg * transmission * 0.8, 0.12, 0.88);
+  let src = min(emit / max(alpha, 0.25), vec3<f32>(1.7));
+  return vec4<f32>(tonemap(src), alpha);
 }
 `,
-    // Shared helper FunctionNode (types: CodeNodeInclude[]).
     [fieldLib as never],
   );
 
@@ -363,10 +619,10 @@ fn hitDepth(
   );
 
   const material = new MeshBasicNodeMaterial();
-  material.side = DoubleSide;
+  material.side = FrontSide;
   material.depthTest = true;
   material.depthWrite = true;
-  material.transparent = false;
+  material.transparent = true;
 
   const shadeArgs = {
     worldPos: positionWorld,
@@ -378,7 +634,10 @@ fn hitDepth(
     keyColor: uKeyColor,
     fillDir: uFillDir,
     fillColor: uFillColor,
+    rimDir: uRimDir,
+    rimColor: uRimColor,
     bg: uBg,
+    envIntensity: uEnvIntensity,
     maxSteps: uMaxSteps,
     surfaceEps: uSurfaceEps,
     normalEps: uNormalEps,
@@ -389,6 +648,10 @@ fn hitDepth(
     m0Ior: uM0Ior,
     m0SigmaA: uM0SigmaA,
     m0SigmaS: uM0SigmaS,
+    m0Rim: uM0Rim,
+    m0Spec: uM0Spec,
+    m0Swirl: uM0Swirl,
+    m0Speck: uM0Speck,
     m1Color: uM1Color,
     m1Rough: uM1Rough,
     m1Metal: uM1Metal,
@@ -396,14 +659,24 @@ fn hitDepth(
     m1Ior: uM1Ior,
     m1SigmaA: uM1SigmaA,
     m1SigmaS: uM1SigmaS,
+    m1Rim: uM1Rim,
+    m1Spec: uM1Spec,
+    m1Swirl: uM1Swirl,
+    m1Speck: uM1Speck,
+    envMap: envMapNode,
   };
 
+  const shaded = shadeField(shadeArgs) as Node<"vec4">;
+
   material.colorNode = Fn(() => {
-    const shaded = shadeField(shadeArgs) as Node<"vec4">;
     If(shaded.w.lessThan(0.0), () => {
       Discard();
     });
     return shaded.xyz;
+  })();
+
+  material.opacityNode = Fn(() => {
+    return shaded.w.max(float(0.0));
   })();
 
   material.depthNode = Fn(() => {
@@ -428,12 +701,16 @@ fn hitDepth(
   if (options.definitionHash !== undefined) {
     mesh.userData.definitionHash = options.definitionHash;
   }
+  mesh.userData.lookId = look.id;
   mesh.userData.rayMarchUniforms = {
     uAmbient,
     uKeyDir,
     uKeyColor,
     uFillDir,
     uFillColor,
+    uRimDir,
+    uRimColor,
+    uEnvIntensity,
     uBoundsMin,
     uBoundsMax,
     uMaxSteps,
@@ -447,12 +724,10 @@ fn hitDepth(
   return mesh;
 }
 
-/** True when a mesh is a field sphere-trace display proxy. */
 export function isRayMarchMesh(mesh: Mesh): boolean {
   return mesh.userData?.[RAY_MARCH_USER] === true;
 }
 
-/** Camera uniforms are TSL built-ins on WebGPU. */
 export function updateRayMarchUniforms(
   _mesh: Mesh,
   _cameraPos: Vector3,
