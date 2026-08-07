@@ -1,8 +1,19 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { demoPartDef } from "../document/demoDocument";
-import { boxSolid, sphereSolid, smoothUnion } from "../sdf";
-import { DEMO_SMOOTH_UNION_K_MM } from "../document/demoDocument";
+import {
+  DEMO_CYL_SMOOTH_UNION_K_MM,
+  DEMO_DRILL_AXIS_MAX,
+  DEMO_DRILL_AXIS_MIN,
+  DEMO_SMOOTH_UNION_K_MM,
+  demoPartDef,
+} from "../document/demoDocument";
+import {
+  boxSolid,
+  cylinderSolid,
+  difference,
+  smoothUnion,
+  sphereSolid,
+} from "../sdf";
 import { buildField } from "./buildField";
 import {
   FieldEvaluator,
@@ -11,17 +22,36 @@ import {
 } from "./evaluator";
 
 describe("buildField", () => {
-  it("matches hand-built demo smoothUnion cube ∪ sphere samples", () => {
+  it("matches hand-built demo: cut cube then soft-union sphere", () => {
     const fromTree = buildField(demoPartDef().payload.field);
-    const hand = smoothUnion(
+    // Build order: cube → smooth-unioned cyls (100% overshoot) → cut cube → soft-union sphere
+    const lo = DEMO_DRILL_AXIS_MIN;
+    const hi = DEMO_DRILL_AXIS_MAX;
+    const unionedCyls = smoothUnion(
+      smoothUnion(
+        cylinderSolid([50, 50], 40, lo, hi, "demo-cyl-x", "x"),
+        cylinderSolid([50, 50], 40, lo, hi, "demo-cyl-y", "y"),
+        DEMO_CYL_SMOOTH_UNION_K_MM,
+      ),
+      cylinderSolid([50, 50], 40, lo, hi, "demo-cyl-z", "z"),
+      DEMO_CYL_SMOOTH_UNION_K_MM,
+      "unioned-cyls",
+    );
+    const cutCube = difference(
       boxSolid([0, 0, 0], [100, 100, 100], "demo-cube"),
+      unionedCyls,
+      "cut-cube",
+    );
+    const hand = smoothUnion(
+      cutCube,
       sphereSolid([100, 100, 100], 50, "demo-sphere"),
       DEMO_SMOOTH_UNION_K_MM,
       "demo-union",
     );
 
     const samples: [number, number, number][] = [
-      [50, 50, 50],
+      [10, 10, 10], // solid corner of cut cube
+      [50, 50, 50], // centroid — inside the cross-drill (air)
       [0, 0, 0],
       [100, 100, 100],
       [150, 100, 100],
@@ -35,7 +65,9 @@ describe("buildField", () => {
       );
     }
     assert.equal(fromTree.leafId, "demo-union");
-    assert.equal(fromTree.leafAt?.(50, 50, 50), "demo-cube");
+    assert.ok(fromTree.evaluate(10, 10, 10) < 0);
+    assert.ok(fromTree.evaluate(50, 50, 50) > 0);
+    assert.equal(fromTree.leafAt?.(10, 10, 10), "demo-cube");
     assert.equal(fromTree.leafAt?.(140, 100, 100), "demo-sphere");
   });
 });

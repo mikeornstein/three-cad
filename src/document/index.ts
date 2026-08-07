@@ -10,6 +10,7 @@ export { DOCUMENT_SCHEMA_VERSION } from "./types";
 
 export type {
   BoxNode,
+  CylinderAxis,
   CylinderNode,
   DifferenceNode,
   FieldGeneratorRef,
@@ -32,6 +33,9 @@ export {
 } from "./hash";
 
 export {
+  DEMO_CYL_SMOOTH_UNION_K_MM,
+  DEMO_DRILL_AXIS_MAX,
+  DEMO_DRILL_AXIS_MIN,
   DEMO_SMOOTH_UNION_K_MM,
   demoAssemblyDocument,
   demoFieldNode,

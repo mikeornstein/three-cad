@@ -123,6 +123,10 @@ export function offset(
 /**
  * Polynomial smooth-min union (Quilez). Global blend — not a targeted edge fillet.
  * `k` is blend radius-ish in mm (larger = softer join).
+ *
+ * Soft-min is always ≤ hard min, so it *adds* solid in the blend. After a
+ * difference (holes/voids), that extra solid can re-fill voids wherever the
+ * other operand is strongly negative — the result can look like the undrilled body.
  */
 export function smoothUnion(
   a: FieldSolid,

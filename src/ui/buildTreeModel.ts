@@ -72,14 +72,16 @@ export function fieldNodeToBuildTree(
         detail: `r=${fmtNum(node.radius)} · ⌀${fmtNum(node.radius * 2)} @ ${fmtCorner(node.center)}`,
         leafId: node.leafId,
       };
-    case "cylinder":
+    case "cylinder": {
+      const axis = node.axis ?? "z";
       return {
         path,
         op: "cylinder",
         title: titleWithLeaf("cylinder", node.leafId),
-        detail: `r=${fmtNum(node.radius)} · z ${fmtNum(node.zMin)}…${fmtNum(node.zMax)} · xy ${fmtPair(node.centerXy)}`,
+        detail: `⌀${fmtNum(node.radius * 2)} · ${axis}-axis ${fmtNum(node.zMin)}…${fmtNum(node.zMax)} · center ${fmtPair(node.centerXy)}`,
         leafId: node.leafId,
       };
+    }
     case "union":
     case "intersection":
     case "difference":
