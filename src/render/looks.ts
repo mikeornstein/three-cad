@@ -24,8 +24,13 @@ export interface SceneLook {
   /** Grid helper colors. */
   readonly gridCenter: number;
   readonly gridLine: number;
-  /** Cap device pixel ratio for field shading cost. */
+  /** Cap device pixel ratio for field shading cost while interacting. */
   readonly maxPixelRatio: number;
+  /**
+   * Pixel-ratio cap after the viewport settles (camera idle).
+   * Higher than maxPixelRatio sharpens edges when orbit cost is free.
+   */
+  readonly stillMaxPixelRatio: number;
   /** Default sphere-trace step budget. */
   readonly maxSteps: number;
   /** Surface hit epsilon (mm). */
@@ -59,6 +64,8 @@ export const LOOK_MAT_REF_01: SceneLook = {
   gridLine: 0x1e242c,
   // Cap ≤1 so retina fill-rate does not melt the glass volume path when framed.
   maxPixelRatio: 1,
+  // Settled view may spend fill-rate for sharper edges (retina / high-DPI).
+  stillMaxPixelRatio: 2,
   maxSteps: 80,
   surfaceEpsMm: 0.06,
   envIntensity: 1.0,
@@ -82,6 +89,7 @@ export const LOOK_INSPECT: SceneLook = {
   gridCenter: 0x5a6570,
   gridLine: 0x2e343a,
   maxPixelRatio: 1,
+  stillMaxPixelRatio: 1.5,
   maxSteps: 64,
   surfaceEpsMm: 0.08,
   envIntensity: 0.8,
@@ -100,6 +108,7 @@ export function withMobileCaps(look: SceneLook): SceneLook {
   return {
     ...look,
     maxPixelRatio: Math.min(look.maxPixelRatio, 1),
+    stillMaxPixelRatio: Math.min(look.stillMaxPixelRatio, 1),
     maxSteps: Math.min(look.maxSteps, 48),
     surfaceEpsMm: Math.max(look.surfaceEpsMm, 0.08),
   };

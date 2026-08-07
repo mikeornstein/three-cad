@@ -984,14 +984,18 @@ type FloatUniform = { value: number };
 export interface RayMarchUniformBag {
   uMaxSteps?: FloatUniform;
   uSurfaceEps?: FloatUniform;
+  uNormalEps?: FloatUniform;
   uVolMaxSteps?: FloatUniform;
   uVolStepScale?: FloatUniform;
   uIblQuality?: FloatUniform;
 }
 
 /**
- * Map interactive quality in [0, 1] onto sphere-trace / volume / IBL LOD uniforms.
- * Call when camera zoom / screen fill / FPS budget changes. q=1 is full look-dev cost.
+ * Map quality onto sphere-trace / volume / IBL LOD uniforms.
+ *
+ * - q in [0.12, 1]: interactive look-dev (zoom / FPS LOD). q=1 is full cost.
+ * - q in (1, 1.35]: still / inspect boost — more surface steps, tighter hit eps.
+ *   Volume path is already maxed at q=1 (shader loop cap 48).
  *
  * Below ~0.45 the shader takes the cheap volume path (no swirl/specks, large steps).
  */
@@ -1002,26 +1006,37 @@ export function applyRayMarchQuality(mesh: Mesh, quality: number): void {
   const base = mesh.userData.rayMarchBase as
     | { maxSteps: number; surfaceEpsMm: number }
     | undefined;
-  const q = Math.min(1, Math.max(0.12, quality));
+  const q = Math.min(1.35, Math.max(0.12, quality));
+  const qInt = Math.min(1, q);
+  const stillExtra = Math.max(0, q - 1); // 0..0.35 when inspect-boosted
   const baseSteps = base?.maxSteps ?? 80;
   const baseEps = base?.surfaceEpsMm ?? 0.06;
 
   if (u.uMaxSteps) {
     // Keep enough surface steps to hit thin walls / drill edges when close.
-    u.uMaxSteps.value = Math.round(baseSteps * (0.4 + 0.6 * q));
+    // Still mode may push toward the sphere-trace hard cap (128).
+    const steps =
+      baseSteps * (0.4 + 0.6 * qInt) + stillExtra * (128 - baseSteps);
+    u.uMaxSteps.value = Math.min(128, Math.round(steps));
   }
   if (u.uSurfaceEps) {
-    u.uSurfaceEps.value = baseEps * (2.8 - 1.8 * q);
+    // Tighter surface when still (up to ~40% finer than full interactive).
+    u.uSurfaceEps.value = baseEps * (2.8 - 1.8 * qInt) * (1 - stillExtra * 1.15);
   }
   if (u.uVolMaxSteps) {
     // Floor at 8 — cheap path threshold in shader is volMaxSteps < 22.
-    u.uVolMaxSteps.value = Math.round(8 + 40 * q);
+    // Cap 48 matches the WGSL volume loop bound.
+    u.uVolMaxSteps.value = Math.min(48, Math.round(8 + 40 * qInt));
   }
   if (u.uVolStepScale) {
-    u.uVolStepScale.value = 3.2 - 2.2 * q;
+    u.uVolStepScale.value = 3.2 - 2.2 * qInt;
   }
   if (u.uIblQuality) {
-    u.uIblQuality.value = q;
+    u.uIblQuality.value = qInt;
+  }
+  if (u.uNormalEps) {
+    // Slightly sharper normals when settled (default base 0.12 mm).
+    u.uNormalEps.value = 0.12 * (1.35 - 0.35 * qInt) * (1 - stillExtra * 0.35);
   }
 }
 
