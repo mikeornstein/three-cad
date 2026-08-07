@@ -23,8 +23,12 @@ import {
 } from "./fieldDef";
 
 const CUBE_MM = 100;
-const SPHERE_RADIUS_MM = 50;
-const CORNER = [CUBE_MM, CUBE_MM, CUBE_MM] as const;
+/** Demo sphere radius (mm). Exported for live cursor-follow. */
+export const DEMO_SPHERE_RADIUS_MM = 50;
+const SPHERE_RADIUS_MM = DEMO_SPHERE_RADIUS_MM;
+/** Modeled sphere center at the +X/+Y/+Z cube corner (mm). */
+export const DEMO_SPHERE_CENTER_MM = [CUBE_MM, CUBE_MM, CUBE_MM] as const;
+const CORNER = DEMO_SPHERE_CENTER_MM;
 /** Cube centroid — all three drill axes pass through here. */
 const CENTROID = CUBE_MM * 0.5;
 /** Through-hole diameter (mm). */

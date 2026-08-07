@@ -62,6 +62,9 @@ export class Viewport {
   private readonly fpsEl: HTMLElement;
   private fpsFrames = 0;
   private fpsWindowStart = 0;
+  /** Callbacks run each frame after controls/camera update, before render. */
+  private readonly frameHooks = new Set<(dtMs: number) => void>();
+  private lastFrameTime = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.scene.add(this.root);
@@ -266,11 +269,23 @@ export class Viewport {
     this.appliedPixelRatio = 0;
   }
 
+  /**
+   * Register a per-frame hook (e.g. cursor-follow animation).
+   * Returns an unsubscribe function.
+   */
+  onFrame(cb: (dtMs: number) => void): () => void {
+    this.frameHooks.add(cb);
+    return () => {
+      this.frameHooks.delete(cb);
+    };
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     cancelAnimationFrame(this.animationId);
     window.removeEventListener("resize", this.onResize);
+    this.frameHooks.clear();
     this.clearGroup(this.content);
     this.controls.dispose();
     this.renderer.dispose();
@@ -336,8 +351,17 @@ export class Viewport {
   private readonly loop = (): void => {
     if (this.disposed || !this.initialized) return;
     this.animationId = requestAnimationFrame(this.loop);
+    const now = performance.now();
+    const dtMs =
+      this.lastFrameTime === 0
+        ? 16.67
+        : Math.min(now - this.lastFrameTime, 100);
+    this.lastFrameTime = now;
     this.controls.update();
     this.camera.updateMatrixWorld();
+    for (const hook of this.frameHooks) {
+      hook(dtMs);
+    }
     this.updateZoomLod();
     this.renderer.render(this.scene, this.camera);
     this.tickFps();

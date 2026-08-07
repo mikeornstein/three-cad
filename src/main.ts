@@ -1,6 +1,8 @@
 import "./styles.css";
 import { demoPartDef } from "./document/demoDocument";
 import { createDemoSolid } from "./demo/createDemoSolid";
+import { SphereCursorFollow } from "./demo/sphereCursorFollow";
+import type { LiveSphereHandle } from "./render/createFieldRayMarchMesh";
 import { DEFAULT_LIBRARY_ENTRY } from "./render/library";
 import { loadStudioEnvironment } from "./render/studioEnv";
 import { BuildTreePanel } from "./ui/BuildTreePanel";
@@ -116,6 +118,16 @@ async function main(): Promise<void> {
     const hash = solid.userData.definitionHash as string | undefined;
     if (hash) {
       screenConsole?.log(`demo part hash: ${hash}`);
+    }
+
+    const liveSphere = solid.userData.liveSphere as LiveSphereHandle | undefined;
+    if (liveSphere) {
+      new SphereCursorFollow({
+        viewport,
+        liveSphere,
+        canvas,
+        log: (msg) => screenConsole?.log(msg),
+      });
     }
   } catch (err) {
     console.error("Failed to build demo solid", err);

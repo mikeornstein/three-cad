@@ -9,6 +9,7 @@ export {
   WGSL_SDF_HELPERS,
   type FieldWgslCompileOptions,
   type FieldWgslCompileResult,
+  type LiveFieldParam,
 } from "./fieldToWgsl";
 export {
   DEMO_LEAF_MATERIAL_WEIGHT,
@@ -44,9 +45,12 @@ export {
   applyRayMarchQuality,
   createFieldRayMarchMesh,
   isRayMarchMesh,
+  LIVE_SPHERE_USER,
   RAY_MARCH_USER,
   updateRayMarchUniforms,
   type FieldRayMarchMesh,
   type FieldRayMarchOptions,
+  type LiveSphereHandle,
+  type LiveSphereSpec,
   type RayMarchUniformBag,
 } from "./createFieldRayMarchMesh";

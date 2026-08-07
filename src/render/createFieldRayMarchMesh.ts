@@ -36,6 +36,7 @@ import {
   wgslFn,
 } from "three/tsl";
 import type { FieldNode } from "../document/fieldDef";
+import { boundsOf } from "./fieldBounds";
 import { fieldNodeToWgsl } from "./fieldToWgsl";
 import { DEFAULT_LOOK, type SceneLook } from "./looks";
 import {
@@ -51,6 +52,24 @@ import {
 
 /** userData flag: this mesh is a field ray-march proxy, not a tessellation. */
 export const RAY_MARCH_USER = "threeCadRayMarch";
+
+/** Movable sphere leaf driven by uniforms (real-time soft-min without recompile). */
+export interface LiveSphereSpec {
+  readonly leafId: string;
+  readonly center: readonly [number, number, number] | Vector3;
+  readonly radius: number;
+}
+
+/** Runtime handle to animate a live sphere (center/radius + AABB). */
+export interface LiveSphereHandle {
+  readonly leafId: string;
+  readonly restCenter: Vector3;
+  readonly restRadius: number;
+  setCenter(v: Vector3 | readonly [number, number, number]): void;
+  setRadius(r: number): void;
+  getCenter(out?: Vector3): Vector3;
+  getRadius(): number;
+}
 
 export interface FieldRayMarchOptions {
   readonly name?: string;
@@ -71,11 +90,18 @@ export interface FieldRayMarchOptions {
   readonly envMap?: Texture | null;
   /** Multiplier on HDR samples. Default from look.envIntensity or 1. */
   readonly envIntensity?: number;
+  /**
+   * Sphere leaves whose center/radius are GPU uniforms (cursor follow, animation).
+   * Smooth-union and materials re-evaluate every frame without recompiling WGSL.
+   */
+  readonly liveSpheres?: readonly LiveSphereSpec[];
 }
 
 export interface FieldRayMarchMesh extends Mesh {
   material: MeshBasicNodeMaterial;
 }
+
+export const LIVE_SPHERE_USER = "threeCadLiveSpheres";
 
 /** 1×1 black float texture so the shader always has a valid env binding. */
 let fallbackEnv: DataTexture | null = null;
@@ -97,6 +123,11 @@ function vecFromTuple(t: readonly [number, number, number]): Vector3 {
   return new Vector3(t[0], t[1], t[2]);
 }
 
+function toVec3(v: readonly [number, number, number] | Vector3): Vector3 {
+  if (v instanceof Vector3) return v.clone();
+  return new Vector3(v[0], v[1], v[2]);
+}
+
 /**
  * Create an AABB box mesh whose fragment shader sphere-traces `fieldNode`.
  */
@@ -112,9 +143,37 @@ export function createFieldRayMarchMesh(
   const envIntensity =
     options.envIntensity ?? look.envIntensity ?? 1.0;
 
+  const liveSpheres = options.liveSpheres ?? [];
+  const liveSphereCenters: Record<string, string> = {};
+  const liveSphereRadii: Record<string, string> = {};
+  const liveInitial = new Map<
+    string,
+    { center: Vector3; radius: number; centerParam: string; radiusParam: string }
+  >();
+
+  liveSpheres.forEach((spec, i) => {
+    const suffix = liveSpheres.length === 1 ? "" : String(i);
+    const centerParam = `liveSphereCenter${suffix}`;
+    const radiusParam = `liveSphereRadius${suffix}`;
+    liveSphereCenters[spec.leafId] = centerParam;
+    liveSphereRadii[spec.leafId] = radiusParam;
+    const c = toVec3(spec.center);
+    liveInitial.set(spec.leafId, {
+      center: c.clone(),
+      radius: spec.radius,
+      centerParam,
+      radiusParam,
+    });
+  });
+
   const compiled = fieldNodeToWgsl(fieldNode, {
     leafMaterialWeight: leafWeights,
+    liveSphereCenters:
+      liveSpheres.length > 0 ? liveSphereCenters : undefined,
+    liveSphereRadii: liveSpheres.length > 0 ? liveSphereRadii : undefined,
   });
+  const liveDecl = compiled.liveDeclSuffix;
+  const liveCall = compiled.liveCallSuffix;
   const pad = options.padMm ?? 1;
   const min = compiled.bounds.min;
   const max = compiled.bounds.max;
@@ -126,8 +185,14 @@ export function createFieldRayMarchMesh(
   const cy = (min[1] + max[1]) * 0.5;
   const cz = (min[2] + max[2]) * 0.5;
 
-  const geometry = new BoxGeometry(sx, sy, sz);
-  geometry.translate(cx, cy, cz);
+  // Unit box + scale/position when live spheres can leave the rest AABB.
+  const useDynamicBounds = liveSpheres.length > 0;
+  const geometry = useDynamicBounds
+    ? new BoxGeometry(1, 1, 1)
+    : new BoxGeometry(sx, sy, sz);
+  if (!useDynamicBounds) {
+    geometry.translate(cx, cy, cz);
+  }
 
   const uBoundsMin = uniform(
     new Vector3(min[0] - pad, min[1] - pad, min[2] - pad),
@@ -135,6 +200,22 @@ export function createFieldRayMarchMesh(
   const uBoundsMax = uniform(
     new Vector3(max[0] + pad, max[1] + pad, max[2] + pad),
   );
+
+  // Live sphere uniforms (TSL nodes keyed by WGSL param name).
+  const liveUniformArgs: Record<string, unknown> = {};
+  const liveCenterUniforms = new Map<
+    string,
+    { value: Vector3 }
+  >();
+  const liveRadiusUniforms = new Map<string, { value: number }>();
+  for (const [, init] of liveInitial) {
+    const uC = uniform(init.center.clone());
+    const uR = uniform(float(init.radius));
+    liveUniformArgs[init.centerParam] = uC;
+    liveUniformArgs[init.radiusParam] = uR;
+    liveCenterUniforms.set(init.centerParam, uC as { value: Vector3 });
+    liveRadiusUniforms.set(init.radiusParam, uR as { value: number });
+  }
   const uAmbient = uniform(colorFromRgb(look.ambient));
   const uKeyDir = uniform(vecFromTuple(look.keyDir).normalize());
   const uKeyColor = uniform(colorFromRgb(look.keyColor));
@@ -216,7 +297,7 @@ fn sphereTrace(
   boundsMin: vec3<f32>,
   boundsMax: vec3<f32>,
   maxSteps: f32,
-  surfaceEps: f32
+  surfaceEps: f32${liveDecl}
 ) -> f32 {
   let aabb = intersectAabb(ro, rd, boundsMin, boundsMax);
   if (aabb.z < 0.5) {
@@ -231,7 +312,7 @@ fn sphereTrace(
     if (i >= maxS) { break; }
     if (t > tFar) { break; }
     let p = ro + rd * t;
-    let d = sampleField(p).x;
+    let d = sampleField(p${liveCall}).x;
     if (d < surfaceEps) {
       return t;
     }
@@ -241,17 +322,17 @@ fn sphereTrace(
   return -1.0;
 }
 
-fn calcNormal(p: vec3<f32>, normalEps: f32) -> vec3<f32> {
+fn calcNormal(p: vec3<f32>, normalEps: f32${liveDecl}) -> vec3<f32> {
   let e = normalEps;
   let k0 = vec3<f32>(1.0, -1.0, -1.0);
   let k1 = vec3<f32>(-1.0, 1.0, -1.0);
   let k2 = vec3<f32>(-1.0, -1.0, 1.0);
   let k3 = vec3<f32>(1.0, 1.0, 1.0);
   return normalize(
-    k0 * sampleField(p + e * k0).x +
-    k1 * sampleField(p + e * k1).x +
-    k2 * sampleField(p + e * k2).x +
-    k3 * sampleField(p + e * k3).x
+    k0 * sampleField(p + e * k0${liveCall}).x +
+    k1 * sampleField(p + e * k1${liveCall}).x +
+    k2 * sampleField(p + e * k2${liveCall}).x +
+    k3 * sampleField(p + e * k3${liveCall}).x
   );
 }
 
@@ -441,7 +522,7 @@ fn shadeField(
   m1Spec: f32,
   m1Swirl: f32,
   m1Speck: f32,
-  envMap: texture_2d<f32>
+  envMap: texture_2d<f32>${liveDecl}
 ) -> vec4<f32> {
   let ro = cameraPos;
   let rd = normalize(worldPos - cameraPos);
@@ -452,8 +533,8 @@ fn shadeField(
   }
 
   let pos = ro + rd * hitT;
-  let n = calcNormal(pos, normalEps);
-  let s0 = sampleField(pos);
+  let n = calcNormal(pos, normalEps${liveCall});
+  let s0 = sampleField(pos${liveCall});
   let mw = clamp(s0.y, 0.0, 1.0);
 
   let baseColor = mix(m0Color, m1Color, mw);
@@ -528,7 +609,7 @@ fn shadeField(
 
   for (var vi = 0; vi < 48; vi++) {
     if (vi >= maxVol) { break; }
-    let s = sampleField(p);
+    let s = sampleField(p${liveCall});
     if (s.x > surfaceEps) {
       break;
     }
@@ -618,11 +699,11 @@ fn hitDepth(
   boundsMin: vec3<f32>,
   boundsMax: vec3<f32>,
   maxSteps: f32,
-  surfaceEps: f32
+  surfaceEps: f32${liveDecl}
 ) -> f32 {
   let ro = cameraPos;
   let rd = normalize(worldPos - cameraPos);
-  return sphereTrace(ro, rd, boundsMin, boundsMax, maxSteps, surfaceEps);
+  return sphereTrace(ro, rd, boundsMin, boundsMax, maxSteps, surfaceEps${liveCall});
 }
 `,
     [fieldLib as never],
@@ -642,6 +723,7 @@ fn hitDepth(
     boundsMax: uBoundsMax,
     maxSteps: uMaxSteps,
     surfaceEps: uSurfaceEps,
+    ...liveUniformArgs,
   }) as Node<"float">;
 
   const shadeArgs = {
@@ -685,6 +767,7 @@ fn hitDepth(
     m1Swirl: uM1Swirl,
     m1Speck: uM1Speck,
     envMap: envMapNode,
+    ...liveUniformArgs,
   };
 
   const shaded = shadeField(shadeArgs) as Node<"vec4">;
@@ -736,9 +819,151 @@ fn hitDepth(
     uM0Color,
     uM1Color,
   };
+
+  if (useDynamicBounds) {
+    applyProxyBounds(mesh, uBoundsMin, uBoundsMax, min, max, pad);
+    const handles: LiveSphereHandle[] = [];
+    for (const [leafId, init] of liveInitial) {
+      const centerU = liveCenterUniforms.get(init.centerParam)!;
+      const radiusU = liveRadiusUniforms.get(init.radiusParam)!;
+      const restCenter = init.center.clone();
+      const restRadius = init.radius;
+      const handle: LiveSphereHandle = {
+        leafId,
+        restCenter,
+        restRadius,
+        setCenter(v) {
+          const c = toVec3(v);
+          centerU.value.copy(c);
+          refreshLiveBounds(
+            mesh,
+            fieldNode,
+            liveInitial,
+            liveCenterUniforms,
+            liveRadiusUniforms,
+            uBoundsMin,
+            uBoundsMax,
+            pad,
+          );
+        },
+        setRadius(r) {
+          radiusU.value = Math.max(r, 1e-4);
+          refreshLiveBounds(
+            mesh,
+            fieldNode,
+            liveInitial,
+            liveCenterUniforms,
+            liveRadiusUniforms,
+            uBoundsMin,
+            uBoundsMax,
+            pad,
+          );
+        },
+        getCenter(out = new Vector3()) {
+          return out.copy(centerU.value);
+        },
+        getRadius() {
+          return radiusU.value;
+        },
+      };
+      handles.push(handle);
+    }
+    mesh.userData[LIVE_SPHERE_USER] = handles;
+    // Convenience: primary (first) live sphere.
+    mesh.userData.liveSphere = handles[0];
+  }
+
   mesh.frustumCulled = true;
 
   return mesh;
+}
+
+function applyProxyBounds(
+  mesh: Mesh,
+  uBoundsMin: { value: Vector3 },
+  uBoundsMax: { value: Vector3 },
+  min: readonly [number, number, number],
+  max: readonly [number, number, number],
+  pad: number,
+): void {
+  const bmin = new Vector3(min[0] - pad, min[1] - pad, min[2] - pad);
+  const bmax = new Vector3(max[0] + pad, max[1] + pad, max[2] + pad);
+  uBoundsMin.value.copy(bmin);
+  uBoundsMax.value.copy(bmax);
+  const size = new Vector3().subVectors(bmax, bmin);
+  const center = new Vector3().addVectors(bmin, bmax).multiplyScalar(0.5);
+  mesh.position.copy(center);
+  mesh.scale.set(
+    Math.max(size.x, 1e-3),
+    Math.max(size.y, 1e-3),
+    Math.max(size.z, 1e-3),
+  );
+  mesh.updateMatrixWorld(true);
+}
+
+function refreshLiveBounds(
+  mesh: Mesh,
+  fieldNode: FieldNode,
+  liveInitial: Map<
+    string,
+    { center: Vector3; radius: number; centerParam: string; radiusParam: string }
+  >,
+  liveCenterUniforms: Map<string, { value: Vector3 }>,
+  liveRadiusUniforms: Map<string, { value: number }>,
+  uBoundsMin: { value: Vector3 },
+  uBoundsMax: { value: Vector3 },
+  pad: number,
+): void {
+  const patched = patchLiveSpheres(fieldNode, (leafId, node) => {
+    const init = liveInitial.get(leafId);
+    if (!init) return node;
+    const cU = liveCenterUniforms.get(init.centerParam);
+    const rU = liveRadiusUniforms.get(init.radiusParam);
+    const c = cU?.value ?? init.center;
+    const r = rU?.value ?? init.radius;
+    return {
+      ...node,
+      center: [c.x, c.y, c.z] as const,
+      radius: r,
+    };
+  });
+  const b = boundsOf(patched);
+  applyProxyBounds(mesh, uBoundsMin, uBoundsMax, b.min, b.max, pad);
+}
+
+function patchLiveSpheres(
+  node: FieldNode,
+  patch: (
+    leafId: string,
+    sphere: Extract<FieldNode, { op: "sphere" }>,
+  ) => FieldNode,
+): FieldNode {
+  switch (node.op) {
+    case "sphere":
+      return node.leafId ? patch(node.leafId, node) : node;
+    case "box":
+    case "cylinder":
+      return node;
+    case "union":
+    case "intersection":
+    case "difference":
+    case "smoothUnion":
+      return {
+        ...node,
+        a: patchLiveSpheres(node.a, patch),
+        b: patchLiveSpheres(node.b, patch),
+      };
+    case "translate":
+    case "offset":
+      return {
+        ...node,
+        solid: patchLiveSpheres(node.solid, patch),
+      };
+    default: {
+      const _e: never = node;
+      return _e;
+    }
+  }
 }
 
 export function isRayMarchMesh(mesh: Mesh): boolean {

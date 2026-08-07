@@ -21,6 +21,24 @@ export interface FieldWgslCompileOptions {
    * Missing / empty leafId → 0.
    */
   readonly leafMaterialWeight?: Readonly<Record<string, number>>;
+  /**
+   * leafId → WGSL parameter name for a live sphere center (`vec3<f32>`).
+   * When set, that sphere's center is not baked — callers pass the param each sample.
+   */
+  readonly liveSphereCenters?: Readonly<Record<string, string>>;
+  /**
+   * leafId → WGSL parameter name for a live sphere radius (`f32`).
+   * When set, that sphere's radius is not baked.
+   */
+  readonly liveSphereRadii?: Readonly<Record<string, string>>;
+}
+
+/** Extra sampleField parameter (after `p`) for live / animated leaves. */
+export interface LiveFieldParam {
+  readonly name: string;
+  readonly wgslType: "vec3<f32>" | "f32";
+  readonly leafId: string;
+  readonly role: "sphereCenter" | "sphereRadius";
 }
 
 export interface FieldWgslCompileResult {
@@ -36,6 +54,21 @@ export interface FieldWgslCompileResult {
   };
   /** Number of SSA-style temps emitted (debug / cost signal). */
   readonly tempCount: number;
+  /**
+   * Ordered live params appended to `sampleField(p, …)` / `map` / `matWeight`.
+   * Empty when every leaf is fully baked.
+   */
+  readonly liveParams: readonly LiveFieldParam[];
+  /**
+   * WGSL parameter-list suffix for live params, e.g.
+   * `, liveSphereCenter: vec3<f32>, liveSphereRadius: f32` or `""`.
+   */
+  readonly liveDeclSuffix: string;
+  /**
+   * WGSL argument-list suffix for live params, e.g.
+   * `, liveSphereCenter, liveSphereRadius` or `""`.
+   */
+  readonly liveCallSuffix: string;
 }
 
 /** Shared SDF primitives used by every compiled map(). */
@@ -69,6 +102,14 @@ export function fieldNodeToWgsl(
   options: FieldWgslCompileOptions = {},
 ): FieldWgslCompileResult {
   const leafW = options.leafMaterialWeight ?? {};
+  const liveCenters = options.liveSphereCenters ?? {};
+  const liveRadii = options.liveSphereRadii ?? {};
+  const liveParams = collectLiveParams(liveCenters, liveRadii);
+  const liveDeclSuffix = liveParams
+    .map((p) => `, ${p.name}: ${p.wgslType}`)
+    .join("");
+  const liveCallSuffix = liveParams.map((p) => `, ${p.name}`).join("");
+
   let nextId = 0;
   const lines: string[] = [];
 
@@ -100,9 +141,10 @@ export function fieldNodeToWgsl(
         return { d, w };
       }
       case "sphere": {
-        const [cx, cy, cz] = node.center;
+        const centerExpr = liveCenterExpr(node.leafId, node.center, liveCenters);
+        const radiusExpr = liveRadiusExpr(node.leafId, node.radius, liveRadii);
         lines.push(
-          `let ${d} = sdSphere((${pointExpr}) - vec3<f32>(${f(cx)}, ${f(cy)}, ${f(cz)}), ${f(node.radius)});`,
+          `let ${d} = sdSphere((${pointExpr}) - ${centerExpr}, ${radiusExpr});`,
         );
         lines.push(`let ${w} = ${f(weightOf(node.leafId))};`);
         return { d, w };
@@ -207,17 +249,17 @@ export function fieldNodeToWgsl(
   const mapSource = [
     WGSL_SDF_HELPERS,
     "",
-    "fn sampleField(p: vec3<f32>) -> vec2<f32> {",
+    `fn sampleField(p: vec3<f32>${liveDeclSuffix}) -> vec2<f32> {`,
     ...body,
     `  return vec2<f32>(${rootPair.d}, ${rootPair.w});`,
     "}",
     "",
-    "fn map(p: vec3<f32>) -> f32 {",
-    "  return sampleField(p).x;",
+    `fn map(p: vec3<f32>${liveDeclSuffix}) -> f32 {`,
+    `  return sampleField(p${liveCallSuffix}).x;`,
     "}",
     "",
-    "fn matWeight(p: vec3<f32>) -> f32 {",
-    "  return sampleField(p).y;",
+    `fn matWeight(p: vec3<f32>${liveDeclSuffix}) -> f32 {`,
+    `  return sampleField(p${liveCallSuffix}).y;`,
     "}",
   ].join("\n");
 
@@ -225,7 +267,81 @@ export function fieldNodeToWgsl(
     mapSource,
     bounds: boundsOf(root),
     tempCount: nextId,
+    liveParams,
+    liveDeclSuffix,
+    liveCallSuffix,
   };
+}
+
+function collectLiveParams(
+  centers: Readonly<Record<string, string>>,
+  radii: Readonly<Record<string, string>>,
+): LiveFieldParam[] {
+  const leafIds = new Set([
+    ...Object.keys(centers),
+    ...Object.keys(radii),
+  ]);
+  const sorted = [...leafIds].sort();
+  const params: LiveFieldParam[] = [];
+  const usedNames = new Set<string>();
+
+  for (const leafId of sorted) {
+    const cName = centers[leafId];
+    if (cName) {
+      assertValidParamName(cName, usedNames);
+      usedNames.add(cName);
+      params.push({
+        name: cName,
+        wgslType: "vec3<f32>",
+        leafId,
+        role: "sphereCenter",
+      });
+    }
+    const rName = radii[leafId];
+    if (rName) {
+      assertValidParamName(rName, usedNames);
+      usedNames.add(rName);
+      params.push({
+        name: rName,
+        wgslType: "f32",
+        leafId,
+        role: "sphereRadius",
+      });
+    }
+  }
+  return params;
+}
+
+function assertValidParamName(name: string, used: Set<string>): void {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    throw new Error(`fieldNodeToWgsl: invalid live param name "${name}"`);
+  }
+  if (used.has(name)) {
+    throw new Error(`fieldNodeToWgsl: duplicate live param name "${name}"`);
+  }
+}
+
+function liveCenterExpr(
+  leafId: string | undefined,
+  center: Vec3,
+  liveCenters: Readonly<Record<string, string>>,
+): string {
+  if (leafId && liveCenters[leafId]) {
+    return liveCenters[leafId]!;
+  }
+  const [cx, cy, cz] = center;
+  return `vec3<f32>(${f(cx)}, ${f(cy)}, ${f(cz)})`;
+}
+
+function liveRadiusExpr(
+  leafId: string | undefined,
+  radius: number,
+  liveRadii: Readonly<Record<string, string>>,
+): string {
+  if (leafId && liveRadii[leafId]) {
+    return liveRadii[leafId]!;
+  }
+  return f(radius);
 }
 
 function clamp01(n: number): number {

@@ -37,6 +37,8 @@ export {
   DEMO_DRILL_AXIS_MAX,
   DEMO_DRILL_AXIS_MIN,
   DEMO_SMOOTH_UNION_K_MM,
+  DEMO_SPHERE_CENTER_MM,
+  DEMO_SPHERE_RADIUS_MM,
   demoAssemblyDocument,
   demoFieldNode,
   demoPartDef,
