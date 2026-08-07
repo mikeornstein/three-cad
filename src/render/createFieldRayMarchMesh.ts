@@ -27,18 +27,12 @@ import {
   Discard,
   Fn,
   If,
-  cameraFar,
-  cameraNear,
   cameraPosition,
-  cameraViewMatrix,
   float,
-  normalize,
   positionWorld,
   texture,
   uniform,
   vec3,
-  vec4,
-  viewZToPerspectiveDepth,
   wgslFn,
 } from "three/tsl";
 import type { FieldNode } from "../document/fieldDef";
@@ -150,13 +144,17 @@ export function createFieldRayMarchMesh(
   const uRimColor = uniform(colorFromRgb(look.rimColor));
   const uBg = uniform(new Color(look.background));
   const uEnvIntensity = uniform(float(envIntensity));
-  const uMaxSteps = uniform(
-    float(options.maxSteps ?? look.maxSteps ?? 80),
-  );
-  const uSurfaceEps = uniform(
-    float(options.surfaceEpsMm ?? look.surfaceEpsMm ?? 0.06),
-  );
+  const baseMaxSteps = options.maxSteps ?? look.maxSteps ?? 80;
+  const baseSurfaceEps = options.surfaceEpsMm ?? look.surfaceEpsMm ?? 0.06;
+  const uMaxSteps = uniform(float(baseMaxSteps));
+  const uSurfaceEps = uniform(float(baseSurfaceEps));
   const uNormalEps = uniform(float(0.12));
+  /** Volume integrator step budget (LOD). */
+  const uVolMaxSteps = uniform(float(48));
+  /** Multiplier on volume ds — >1 when zoomed in (cheaper bulk). */
+  const uVolStepScale = uniform(float(1));
+  /** 1 = full IBL blur, <0.55 = single-tap HDR (LOD). */
+  const uIblQuality = uniform(float(1));
 
   const uM0Color = uniform(
     options.color !== undefined
@@ -226,9 +224,10 @@ fn sphereTrace(
   }
   var t = max(aabb.x, 0.0);
   let tFar = aabb.y;
-  let stepScale = 0.9;
+  let stepScale = 0.92;
   let maxS = i32(maxSteps);
-  for (var i = 0; i < 96; i++) {
+  // Hard cap 128; budget is controlled by maxSteps (LOD).
+  for (var i = 0; i < 128; i++) {
     if (i >= maxS) { break; }
     if (t > tFar) { break; }
     let p = ro + rd * t;
@@ -236,7 +235,8 @@ fn sphereTrace(
     if (d < surfaceEps) {
       return t;
     }
-    t = t + max(d * stepScale, surfaceEps * 0.5);
+    // Slightly larger min advance than 0.5·eps to avoid crawling when close.
+    t = t + max(d * stepScale, surfaceEps * 0.75);
   }
   return -1.0;
 }
@@ -404,8 +404,7 @@ ${compiled.mapSource}
 fn shadeField(
   worldPos: vec3<f32>,
   cameraPos: vec3<f32>,
-  boundsMin: vec3<f32>,
-  boundsMax: vec3<f32>,
+  hitT: f32,
   ambient: vec3<f32>,
   keyDir: vec3<f32>,
   keyColor: vec3<f32>,
@@ -415,9 +414,11 @@ fn shadeField(
   rimColor: vec3<f32>,
   bg: vec3<f32>,
   envIntensity: f32,
-  maxSteps: f32,
   surfaceEps: f32,
   normalEps: f32,
+  volMaxSteps: f32,
+  volStepScale: f32,
+  iblQuality: f32,
   m0Color: vec3<f32>,
   m0Rough: f32,
   m0Metal: f32,
@@ -445,7 +446,7 @@ fn shadeField(
   let ro = cameraPos;
   let rd = normalize(worldPos - cameraPos);
 
-  let hitT = sphereTrace(ro, rd, boundsMin, boundsMax, maxSteps, surfaceEps);
+  // hitT is shared with depthNode — one sphereTrace per fragment.
   if (hitT < 0.0) {
     return vec4<f32>(0.0, 0.0, 0.0, -1.0);
   }
@@ -469,11 +470,18 @@ fn shadeField(
   let F0 = mix(vec3<f32>(f0d), baseColor, metalness);
   let F = fresnelSchlick(nDotV, F0);
 
-  // --- Real IBL from HDR equirect ---
+  // --- Real IBL from HDR equirect (blur is LOD-gated when zoomed in) ---
   let R = reflect(rd, n);
   let envSpread = mix(0.03, 0.2, roughness);
-  let envSpec = sampleHDRBlur(envMap, R, envIntensity * 0.85, envSpread);
-  let envDiff = sampleHDRBlur(envMap, n, envIntensity * 0.3, 0.4);
+  var envSpec: vec3<f32>;
+  var envDiff: vec3<f32>;
+  if (iblQuality < 0.55) {
+    envSpec = sampleHDR(envMap, R, envIntensity * 0.85);
+    envDiff = sampleHDR(envMap, n, envIntensity * 0.3);
+  } else {
+    envSpec = sampleHDRBlur(envMap, R, envIntensity * 0.85, envSpread);
+    envDiff = sampleHDRBlur(envMap, n, envIntensity * 0.3, 0.4);
+  }
   let refrDir = refract(rd, n, 1.0 / ior);
   let thruDir = select(rd, normalize(refrDir), length(refrDir) > 0.01);
   let envThru = sampleHDR(envMap, thruDir, envIntensity * 0.5);
@@ -504,17 +512,22 @@ fn shadeField(
   let rim = rimTint * (fresnelRim * 0.55 + edgeCore * 1.0) * rimBoost;
   let rimLight = rimColor * fresnelRim * ndlRim * rimBoost * 0.15;
 
-  // Clear volume + fine flecks evenly through the bulk (not surface dirt).
+  // Clear volume + fine flecks through the bulk.
+  // When volMaxSteps is low (zoomed-in LOD), skip swirl/specks and take large steps —
+  // full-screen glass volume is the dominant cost close up.
   var T = vec3<f32>(1.0);
   var Cvol = vec3<f32>(0.0);
-  // Start a bit inside so near-surface samples do not dominate fleck look.
   var p = pos + rd * (surfaceEps * 4.0);
-  let minDs = 0.45;
-  let maxDs = 2.8;
-  let maxPath = 160.0;
+  let stepMul = max(volStepScale, 0.75);
+  let cheapVol = volMaxSteps < 22.0;
+  let minDs = select(0.45, 1.6, cheapVol) * stepMul;
+  let maxDs = select(2.8, 8.0, cheapVol) * stepMul;
+  let maxPath = select(160.0, 90.0, cheapVol);
   var pathLen = 0.0;
+  let maxVol = i32(volMaxSteps);
 
   for (var vi = 0; vi < 48; vi++) {
+    if (vi >= maxVol) { break; }
     let s = sampleField(p);
     if (s.x > surfaceEps) {
       break;
@@ -526,17 +539,16 @@ fn shadeField(
     let ss = mix(m0SigmaS, m1SigmaS, w);
     let localSwirl = mix(m0Swirl, m1Swirl, w);
     let localSpeck = mix(m0Speck, m1Speck, w);
-    let dens = volumeSwirl(p, localSwirl);
+    // Procedural swirl is 4× noise — drop it under zoom LOD.
+    let dens = select(volumeSwirl(p, localSwirl), 1.0, cheapVol);
     let saD = sa * mix(1.0, dens, 0.15);
     let ssD = ss * dens;
     let st = saD + ssD;
     let albedo = ssD / max(st, vec3<f32>(1e-4));
 
-    // Small fixed-ish steps so fine flecks are hit evenly along the path.
     let ds = clamp(max(-s.x, surfaceEps) * 0.25 + minDs * 0.55, minDs, maxDs);
 
     let depthIn = max(-s.x, 0.0);
-    // Suppress flecks in the outer shell (~1.2 mm) so they read as interior volume.
     let interior = smoothstep(0.6, 2.2, depthIn);
 
     let thickL = depthIn * 2.0;
@@ -546,26 +558,24 @@ fn shadeField(
       keyColor * ndlKey * lightAtt * 0.25 +
       fillColor * ndlFill * 0.15 +
       ambient * 0.2;
-    // Host medium stays clear.
     var scatter = albedo * Li * col * (0.3 + 0.35 * dens);
 
-    // Fine material flecks — opaque-ish grains of the same family of color.
-    let sp = volumeSpecks(p, localSpeck) * interior;
-    if (sp > 0.04) {
-      let tone = hash31(floor(p / 2.15) + vec3<f32>(2.0, 5.0, 1.0));
-      // Slightly lighter or darker grain of the host material (not dirt grey).
-      let fleckCol = col * mix(0.55, 1.15, tone);
-      // Diffuse only — depth from occlusion of Li through thickness, no shimmer.
-      let fleckLit = fleckCol * (Li * 0.9 + ambient * 0.25);
-      // Strong enough to read as solid flecks inside clear glass.
-      scatter = scatter + fleckLit * sp * 1.8;
-      T = T * (1.0 - sp * 0.35);
+    // Specks only at full quality — cell hash is extra cost per step.
+    var sp = 0.0;
+    if (!cheapVol) {
+      sp = volumeSpecks(p, localSpeck) * interior;
+      if (sp > 0.04) {
+        let tone = hash31(floor(p / 2.15) + vec3<f32>(2.0, 5.0, 1.0));
+        let fleckCol = col * mix(0.55, 1.15, tone);
+        let fleckLit = fleckCol * (Li * 0.9 + ambient * 0.25);
+        scatter = scatter + fleckLit * sp * 1.8;
+        T = T * (1.0 - sp * 0.35);
+      }
     }
 
     let Tr = exp(-st * ds);
     Cvol = Cvol + T * (vec3<f32>(1.0) - Tr) * scatter;
-    // Discrete fleck hit: add a bit of opaque grain independent of continuous media.
-    if (sp > 0.04) {
+    if (!cheapVol && sp > 0.04) {
       let tone2 = hash31(floor(p / 2.15) + vec3<f32>(9.0, 1.0, 4.0));
       let grain = col * mix(0.5, 1.1, tone2) * (Li * 0.85 + ambient * 0.2);
       Cvol = Cvol + T * grain * sp * 0.55;
@@ -573,7 +583,7 @@ fn shadeField(
     T = T * Tr;
     pathLen = pathLen + ds;
 
-    if (max(T.x, max(T.y, T.z)) < 0.015) {
+    if (max(T.x, max(T.y, T.z)) < 0.02) {
       break;
     }
     p = p + rd * ds;
@@ -624,11 +634,20 @@ fn hitDepth(
   material.depthWrite = true;
   material.transparent = true;
 
-  const shadeArgs = {
+  // One sphere-trace per fragment — shared by shade + depth (TSL CSE).
+  const hitT = hitDepth({
     worldPos: positionWorld,
     cameraPos: cameraPosition,
     boundsMin: uBoundsMin,
     boundsMax: uBoundsMax,
+    maxSteps: uMaxSteps,
+    surfaceEps: uSurfaceEps,
+  }) as Node<"float">;
+
+  const shadeArgs = {
+    worldPos: positionWorld,
+    cameraPos: cameraPosition,
+    hitT,
     ambient: uAmbient,
     keyDir: uKeyDir,
     keyColor: uKeyColor,
@@ -638,9 +657,11 @@ fn hitDepth(
     rimColor: uRimColor,
     bg: uBg,
     envIntensity: uEnvIntensity,
-    maxSteps: uMaxSteps,
     surfaceEps: uSurfaceEps,
     normalEps: uNormalEps,
+    volMaxSteps: uVolMaxSteps,
+    volStepScale: uVolStepScale,
+    iblQuality: uIblQuality,
     m0Color: uM0Color,
     m0Rough: uM0Rough,
     m0Metal: uM0Metal,
@@ -679,20 +700,9 @@ fn hitDepth(
     return shaded.w.max(float(0.0));
   })();
 
-  material.depthNode = Fn(() => {
-    const t = hitDepth({
-      worldPos: positionWorld,
-      cameraPos: cameraPosition,
-      boundsMin: uBoundsMin,
-      boundsMax: uBoundsMax,
-      maxSteps: uMaxSteps,
-      surfaceEps: uSurfaceEps,
-    }) as Node<"float">;
-    const rd = normalize(positionWorld.sub(cameraPosition));
-    const hitPos = cameraPosition.add(rd.mul(t));
-    const viewPos = cameraViewMatrix.mul(vec4(hitPos, 1.0));
-    return viewZToPerspectiveDepth(viewPos.z, cameraNear, cameraFar);
-  })();
+  // No custom depthNode: a second sphere-trace (or depth prepass) doubles surface cost.
+  // Misses already Discard() in colorNode so drill holes do not write depth; hit pixels
+  // use the AABB proxy depth which is fine for the current single-solid viewport.
 
   const mesh = new Mesh(geometry, material) as FieldRayMarchMesh;
   if (options.name) mesh.name = options.name;
@@ -702,6 +712,10 @@ fn hitDepth(
     mesh.userData.definitionHash = options.definitionHash;
   }
   mesh.userData.lookId = look.id;
+  mesh.userData.rayMarchBase = {
+    maxSteps: baseMaxSteps,
+    surfaceEpsMm: baseSurfaceEps,
+  };
   mesh.userData.rayMarchUniforms = {
     uAmbient,
     uKeyDir,
@@ -716,6 +730,9 @@ fn hitDepth(
     uMaxSteps,
     uSurfaceEps,
     uNormalEps,
+    uVolMaxSteps,
+    uVolStepScale,
+    uIblQuality,
     uM0Color,
     uM1Color,
   };
@@ -728,11 +745,59 @@ export function isRayMarchMesh(mesh: Mesh): boolean {
   return mesh.userData?.[RAY_MARCH_USER] === true;
 }
 
+/** TSL float uniform value holder. */
+type FloatUniform = { value: number };
+
+export interface RayMarchUniformBag {
+  uMaxSteps?: FloatUniform;
+  uSurfaceEps?: FloatUniform;
+  uVolMaxSteps?: FloatUniform;
+  uVolStepScale?: FloatUniform;
+  uIblQuality?: FloatUniform;
+}
+
+/**
+ * Map interactive quality in [0, 1] onto sphere-trace / volume / IBL LOD uniforms.
+ * Call when camera zoom / screen fill / FPS budget changes. q=1 is full look-dev cost.
+ *
+ * Below ~0.45 the shader takes the cheap volume path (no swirl/specks, large steps).
+ */
+export function applyRayMarchQuality(mesh: Mesh, quality: number): void {
+  if (!isRayMarchMesh(mesh)) return;
+  const u = mesh.userData.rayMarchUniforms as RayMarchUniformBag | undefined;
+  if (!u) return;
+  const base = mesh.userData.rayMarchBase as
+    | { maxSteps: number; surfaceEpsMm: number }
+    | undefined;
+  const q = Math.min(1, Math.max(0.12, quality));
+  const baseSteps = base?.maxSteps ?? 80;
+  const baseEps = base?.surfaceEpsMm ?? 0.06;
+
+  if (u.uMaxSteps) {
+    // Keep enough surface steps to hit thin walls / drill edges when close.
+    u.uMaxSteps.value = Math.round(baseSteps * (0.4 + 0.6 * q));
+  }
+  if (u.uSurfaceEps) {
+    u.uSurfaceEps.value = baseEps * (2.8 - 1.8 * q);
+  }
+  if (u.uVolMaxSteps) {
+    // Floor at 8 — cheap path threshold in shader is volMaxSteps < 22.
+    u.uVolMaxSteps.value = Math.round(8 + 40 * q);
+  }
+  if (u.uVolStepScale) {
+    u.uVolStepScale.value = 3.2 - 2.2 * q;
+  }
+  if (u.uIblQuality) {
+    u.uIblQuality.value = q;
+  }
+}
+
+/** @deprecated Prefer applyRayMarchQuality — kept for call-site compatibility. */
 export function updateRayMarchUniforms(
-  _mesh: Mesh,
+  mesh: Mesh,
   _cameraPos: Vector3,
   _projectionMatrix: unknown,
   _viewMatrix: unknown,
 ): void {
-  // no-op
+  applyRayMarchQuality(mesh, 1);
 }

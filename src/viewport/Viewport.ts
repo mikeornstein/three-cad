@@ -18,6 +18,10 @@ import {
 import { WebGPURenderer } from "three/webgpu";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import {
+  applyRayMarchQuality,
+  isRayMarchMesh,
+} from "../render/createFieldRayMarchMesh";
+import {
   DEFAULT_LOOK,
   type SceneLook,
 } from "../render/looks";
@@ -41,6 +45,19 @@ export class Viewport {
   private grid: GridHelper | null = null;
   private axes: AxesHelper | null = null;
   private studioEnv: StudioEnvironment | null = null;
+
+  /** Bounding radius of current content (mm) — used for zoom LOD. */
+  private contentRadiusMm = 80;
+  /** Last applied pixel ratio (avoid thrashing setPixelRatio). */
+  private appliedPixelRatio = 0;
+  /** Last applied ray-march quality in [0,1]. */
+  private appliedQuality = -1;
+  /**
+   * Extra resolution scale from FPS feedback (1 = full, lower = rescue frame time).
+   * Multiplied with zoom-based quality; recovers slowly when FPS is healthy.
+   */
+  private fpsBudgetScale = 1;
+  private fpsEma = 60;
 
   private readonly fpsEl: HTMLElement;
   private fpsFrames = 0;
@@ -95,8 +112,9 @@ export class Viewport {
 
   applyLook(look: SceneLook): void {
     this.look = look;
-    this.renderer.setPixelRatio(
-      Math.min(window.devicePixelRatio, look.maxPixelRatio),
+    this.appliedPixelRatio = 0;
+    this.applyPixelRatioForQuality(
+      this.appliedQuality < 0 ? 1 : this.appliedQuality,
     );
     this.applyEnvironmentToScene();
     this.rebuildLights();
@@ -231,6 +249,7 @@ export class Viewport {
     const center = box.getCenter(new Vector3());
     const size = box.getSize(new Vector3());
     const radius = Math.max(size.x, size.y, size.z, 1) * 0.5;
+    this.contentRadiusMm = radius;
 
     this.controls.target.copy(center);
 
@@ -242,6 +261,9 @@ export class Viewport {
     this.camera.far = distance * 50;
     this.camera.updateProjectionMatrix();
     this.controls.update();
+    // Reset LOD so the next frame reapplies full quality at the framed view.
+    this.appliedQuality = -1;
+    this.appliedPixelRatio = 0;
   }
 
   dispose(): void {
@@ -305,9 +327,9 @@ export class Viewport {
     const height = this.canvas.clientHeight || window.innerHeight;
     this.camera.aspect = width / Math.max(height, 1);
     this.camera.updateProjectionMatrix();
-    this.renderer.setPixelRatio(
-      Math.min(window.devicePixelRatio, this.look.maxPixelRatio),
-    );
+    // Force pixel-ratio reapply on resize (quality may already be scaled).
+    this.appliedPixelRatio = 0;
+    this.applyPixelRatioForQuality(this.appliedQuality < 0 ? 1 : this.appliedQuality);
     this.renderer.setSize(width, height, false);
   };
 
@@ -316,9 +338,86 @@ export class Viewport {
     this.animationId = requestAnimationFrame(this.loop);
     this.controls.update();
     this.camera.updateMatrixWorld();
+    this.updateZoomLod();
     this.renderer.render(this.scene, this.camera);
     this.tickFps();
   };
+
+  /**
+   * Drop fill-rate + per-pixel shader work when zoomed in or when FPS sags.
+   * Glass volume integration is quadratic-ish with on-screen solid area; zoom LOD
+   * must be aggressive or close-up orbit freezes on laptop GPUs.
+   */
+  private updateZoomLod(): void {
+    const dist = this.camera.position.distanceTo(this.controls.target);
+    // Keep near/far sane while orbiting so close-ups do not clip or lose Z precision.
+    const near = Math.max(dist / 600, 0.01);
+    const far = Math.max(dist * 40, this.contentRadiusMm * 20, 500);
+    if (
+      Math.abs(this.camera.near - near) / near > 0.15 ||
+      Math.abs(this.camera.far - far) / far > 0.15
+    ) {
+      this.camera.near = near;
+      this.camera.far = far;
+      this.camera.updateProjectionMatrix();
+    }
+
+    const halfFovY = (this.camera.fov * Math.PI) / 360;
+    const viewHalfH = Math.max(dist * Math.tan(halfFovY), 1e-3);
+    // ~0.74 at default frameObject() (radius fills ~74% of half-FOV). ≫1 when zoomed in.
+    const screenFill = this.contentRadiusMm / viewHalfH;
+
+    // Keep full look-dev through the framed view; only pull quality once past it.
+    // Past framed: drop fast into the cheap volume path (q < 0.45 → no swirl/specks).
+    const framedFill = 0.78;
+    let zoomQ = 1;
+    if (screenFill > framedFill) {
+      // fill 0.78→1.0, 1.2→0.55, 1.6→0.25, 2.2→0.12
+      zoomQ = Math.max(0.12, 1 - (screenFill - framedFill) * 0.95);
+    }
+
+    const quality = Math.min(1, Math.max(0.12, zoomQ * this.fpsBudgetScale));
+
+    // Always keep shader uniforms in sync (cheap). PR tiers are applied inside
+    // applyPixelRatioForQuality with strong hysteresis.
+    if (Math.abs(quality - this.appliedQuality) >= 0.02) {
+      this.appliedQuality = quality;
+      this.content.traverse((obj) => {
+        if (obj instanceof Mesh && isRayMarchMesh(obj)) {
+          applyRayMarchQuality(obj, quality);
+        }
+      });
+    }
+    this.applyPixelRatioForQuality(quality, screenFill);
+  }
+
+  /**
+   * Pixel-ratio changes reallocate the drawing buffer — do them rarely, in coarse
+   * steps only. Fine LOD is the shader uniforms (free). Thrashing PR while the
+   * user dollys is a major source of zoom jank.
+   */
+  private applyPixelRatioForQuality(quality: number, screenFill = 0.78): void {
+    const q = Math.min(1, Math.max(0.12, quality));
+    const base = Math.min(window.devicePixelRatio || 1, this.look.maxPixelRatio);
+    // Coarse tiers only — never continuous PR while orbiting.
+    let tier = 1;
+    if (screenFill > 2.2 || q < 0.25 || this.fpsBudgetScale < 0.55) {
+      tier = 0.4;
+    } else if (screenFill > 1.35 || q < 0.5 || this.fpsBudgetScale < 0.75) {
+      tier = 0.65;
+    }
+    const pr = Math.max(0.3, base * tier);
+    // Large hysteresis so we do not flip tiers every frame at a boundary.
+    if (this.appliedPixelRatio > 0) {
+      const rel = Math.abs(pr - this.appliedPixelRatio) / this.appliedPixelRatio;
+      if (rel < 0.2) return;
+    }
+    this.appliedPixelRatio = pr;
+    this.renderer.setPixelRatio(pr);
+    const width = this.canvas.clientWidth || window.innerWidth;
+    const height = this.canvas.clientHeight || window.innerHeight;
+    this.renderer.setSize(width, height, false);
+  }
 
   private tickFps(): void {
     const now = performance.now();
@@ -329,8 +428,20 @@ export class Viewport {
     }
     this.fpsFrames += 1;
     const elapsed = now - this.fpsWindowStart;
-    if (elapsed >= 500) {
+    if (elapsed >= 400) {
       const fps = (this.fpsFrames * 1000) / elapsed;
+      this.fpsEma = this.fpsEma * 0.65 + fps * 0.35;
+      // Target ~30 FPS interactive. Drop budget fast when cold; recover slowly.
+      if (this.fpsEma < 24) {
+        this.fpsBudgetScale = Math.max(0.35, this.fpsBudgetScale * 0.88);
+        this.appliedQuality = -1; // force reapply next frame
+      } else if (this.fpsEma < 30) {
+        this.fpsBudgetScale = Math.max(0.4, this.fpsBudgetScale * 0.96);
+        this.appliedQuality = -1;
+      } else if (this.fpsEma > 48 && this.fpsBudgetScale < 1) {
+        this.fpsBudgetScale = Math.min(1, this.fpsBudgetScale * 1.03);
+        this.appliedQuality = -1;
+      }
       this.fpsEl.textContent = `${fps.toFixed(0)} FPS`;
       this.fpsEl.dataset.fps = fps < 20 ? "low" : fps < 40 ? "mid" : "high";
       this.fpsFrames = 0;

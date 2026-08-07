@@ -41,10 +41,12 @@ export {
   type StudioEnvironment,
 } from "./studioEnv";
 export {
+  applyRayMarchQuality,
   createFieldRayMarchMesh,
   isRayMarchMesh,
   RAY_MARCH_USER,
   updateRayMarchUniforms,
   type FieldRayMarchMesh,
   type FieldRayMarchOptions,
+  type RayMarchUniformBag,
 } from "./createFieldRayMarchMesh";
