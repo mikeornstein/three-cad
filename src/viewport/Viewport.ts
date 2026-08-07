@@ -378,31 +378,40 @@ export class Viewport {
 
     const quality = Math.min(1, Math.max(0.12, zoomQ * this.fpsBudgetScale));
 
-    if (Math.abs(quality - this.appliedQuality) < 0.025) {
-      return;
+    // Always keep shader uniforms in sync (cheap). PR tiers are applied inside
+    // applyPixelRatioForQuality with strong hysteresis.
+    if (Math.abs(quality - this.appliedQuality) >= 0.02) {
+      this.appliedQuality = quality;
+      this.content.traverse((obj) => {
+        if (obj instanceof Mesh && isRayMarchMesh(obj)) {
+          applyRayMarchQuality(obj, quality);
+        }
+      });
     }
-    this.appliedQuality = quality;
     this.applyPixelRatioForQuality(quality, screenFill);
-    this.content.traverse((obj) => {
-      if (obj instanceof Mesh && isRayMarchMesh(obj)) {
-        applyRayMarchQuality(obj, quality);
-      }
-    });
   }
 
+  /**
+   * Pixel-ratio changes reallocate the drawing buffer — do them rarely, in coarse
+   * steps only. Fine LOD is the shader uniforms (free). Thrashing PR while the
+   * user dollys is a major source of zoom jank.
+   */
   private applyPixelRatioForQuality(quality: number, screenFill = 0.78): void {
     const q = Math.min(1, Math.max(0.12, quality));
     const base = Math.min(window.devicePixelRatio || 1, this.look.maxPixelRatio);
-    // Bound pixel count roughly by on-screen solid size once past framed fill.
-    const framedFill = 0.78;
-    const fillScale =
-      screenFill <= framedFill
-        ? 1
-        : Math.min(1, framedFill / screenFill);
-    // When quality is crushed, also pull PR (0.12 → ~0.38× base).
-    const qualityScale = 0.28 + 0.72 * q;
-    const pr = Math.max(0.28, base * fillScale * qualityScale * this.fpsBudgetScale);
-    if (Math.abs(pr - this.appliedPixelRatio) < 0.035) return;
+    // Coarse tiers only — never continuous PR while orbiting.
+    let tier = 1;
+    if (screenFill > 2.2 || q < 0.25 || this.fpsBudgetScale < 0.55) {
+      tier = 0.4;
+    } else if (screenFill > 1.35 || q < 0.5 || this.fpsBudgetScale < 0.75) {
+      tier = 0.65;
+    }
+    const pr = Math.max(0.3, base * tier);
+    // Large hysteresis so we do not flip tiers every frame at a boundary.
+    if (this.appliedPixelRatio > 0) {
+      const rel = Math.abs(pr - this.appliedPixelRatio) / this.appliedPixelRatio;
+      if (rel < 0.2) return;
+    }
     this.appliedPixelRatio = pr;
     this.renderer.setPixelRatio(pr);
     const width = this.canvas.clientWidth || window.innerWidth;
