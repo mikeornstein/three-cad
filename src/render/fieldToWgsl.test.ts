@@ -66,5 +66,34 @@ describe("fieldNodeToWgsl", () => {
     assert.match(result.mapSource, /let h\d+/);
     assert.match(result.mapSource, /let p_\d+/);
     assert.match(result.mapSource, /10\.0/);
+    assert.equal(result.liveParams.length, 0);
+    assert.equal(result.liveCallSuffix, "");
+  });
+
+  it("emits live sphere center and radius as sampleField params", () => {
+    const result = fieldNodeToWgsl(demoFieldNode(), {
+      leafMaterialWeight: { "demo-cube": 0, "demo-sphere": 1 },
+      liveSphereCenters: { "demo-sphere": "liveSphereCenter" },
+      liveSphereRadii: { "demo-sphere": "liveSphereRadius" },
+    });
+    assert.match(
+      result.mapSource,
+      /fn sampleField\(p: vec3<f32>, liveSphereCenter: vec3<f32>, liveSphereRadius: f32\)/,
+    );
+    assert.match(
+      result.mapSource,
+      /sdSphere\(\(p\) - liveSphereCenter, liveSphereRadius\)/,
+    );
+    // Baked corner center must not appear for the live sphere.
+    assert.doesNotMatch(
+      result.mapSource,
+      /sdSphere\(\(p\) - vec3<f32>\(100\.0, 100\.0, 100\.0\)/,
+    );
+    assert.equal(result.liveParams.length, 2);
+    assert.equal(result.liveCallSuffix, ", liveSphereCenter, liveSphereRadius");
+    assert.equal(
+      result.liveDeclSuffix,
+      ", liveSphereCenter: vec3<f32>, liveSphereRadius: f32",
+    );
   });
 });

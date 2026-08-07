@@ -12,7 +12,12 @@
  */
 
 import { Mesh, type Texture } from "three";
-import { demoFieldNode, demoPartDef } from "../document/demoDocument";
+import {
+  DEMO_SPHERE_CENTER_MM,
+  DEMO_SPHERE_RADIUS_MM,
+  demoFieldNode,
+  demoPartDef,
+} from "../document/demoDocument";
 import {
   evaluatedPartToThreeMesh,
   getDefaultEvaluator,
@@ -34,6 +39,11 @@ export interface CreateDemoSolidOptions {
   readonly envMap?: Texture | null;
   readonly envIntensity?: number;
   readonly look?: SceneLook;
+  /**
+   * When true (default), demo-sphere center/radius are live uniforms so the
+   * viewport can drive real-time smoothUnion (cursor follow).
+   */
+  readonly liveSphere?: boolean;
 }
 
 /**
@@ -45,6 +55,7 @@ export function createDemoSolid(options: CreateDemoSolidOptions = {}): Mesh {
   const { definitionHash } = getDefaultEvaluator().getField(part);
   const entry = DEFAULT_LIBRARY_ENTRY;
   const look = options.look ?? entry.look;
+  const liveSphere = options.liveSphere !== false;
   return createFieldRayMarchMesh(demoFieldNode(), {
     name: "demo-cyan-amber-resin",
     definitionHash,
@@ -53,6 +64,15 @@ export function createDemoSolid(options: CreateDemoSolidOptions = {}): Mesh {
     look,
     envMap: options.envMap,
     envIntensity: options.envIntensity ?? look.envIntensity,
+    liveSpheres: liveSphere
+      ? [
+          {
+            leafId: "demo-sphere",
+            center: DEMO_SPHERE_CENTER_MM,
+            radius: DEMO_SPHERE_RADIUS_MM,
+          },
+        ]
+      : undefined,
   });
 }
 
