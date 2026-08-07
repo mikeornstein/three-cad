@@ -18,6 +18,10 @@ import {
 import { WebGPURenderer } from "three/webgpu";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import {
+  applyRayMarchQuality,
+  isRayMarchMesh,
+} from "../render/createFieldRayMarchMesh";
+import {
   DEFAULT_LOOK,
   type SceneLook,
 } from "../render/looks";
@@ -41,6 +45,13 @@ export class Viewport {
   private grid: GridHelper | null = null;
   private axes: AxesHelper | null = null;
   private studioEnv: StudioEnvironment | null = null;
+
+  /** Bounding radius of current content (mm) — used for zoom LOD. */
+  private contentRadiusMm = 80;
+  /** Last applied pixel ratio (avoid thrashing setPixelRatio). */
+  private appliedPixelRatio = 0;
+  /** Last applied ray-march quality in [0,1]. */
+  private appliedQuality = -1;
 
   private readonly fpsEl: HTMLElement;
   private fpsFrames = 0;
@@ -95,8 +106,9 @@ export class Viewport {
 
   applyLook(look: SceneLook): void {
     this.look = look;
-    this.renderer.setPixelRatio(
-      Math.min(window.devicePixelRatio, look.maxPixelRatio),
+    this.appliedPixelRatio = 0;
+    this.applyPixelRatioForQuality(
+      this.appliedQuality < 0 ? 1 : this.appliedQuality,
     );
     this.applyEnvironmentToScene();
     this.rebuildLights();
@@ -231,6 +243,7 @@ export class Viewport {
     const center = box.getCenter(new Vector3());
     const size = box.getSize(new Vector3());
     const radius = Math.max(size.x, size.y, size.z, 1) * 0.5;
+    this.contentRadiusMm = radius;
 
     this.controls.target.copy(center);
 
@@ -242,6 +255,9 @@ export class Viewport {
     this.camera.far = distance * 50;
     this.camera.updateProjectionMatrix();
     this.controls.update();
+    // Reset LOD so the next frame reapplies full quality at the framed view.
+    this.appliedQuality = -1;
+    this.appliedPixelRatio = 0;
   }
 
   dispose(): void {
@@ -305,9 +321,9 @@ export class Viewport {
     const height = this.canvas.clientHeight || window.innerHeight;
     this.camera.aspect = width / Math.max(height, 1);
     this.camera.updateProjectionMatrix();
-    this.renderer.setPixelRatio(
-      Math.min(window.devicePixelRatio, this.look.maxPixelRatio),
-    );
+    // Force pixel-ratio reapply on resize (quality may already be scaled).
+    this.appliedPixelRatio = 0;
+    this.applyPixelRatioForQuality(this.appliedQuality < 0 ? 1 : this.appliedQuality);
     this.renderer.setSize(width, height, false);
   };
 
@@ -316,9 +332,65 @@ export class Viewport {
     this.animationId = requestAnimationFrame(this.loop);
     this.controls.update();
     this.camera.updateMatrixWorld();
+    this.updateZoomLod();
     this.renderer.render(this.scene, this.camera);
     this.tickFps();
   };
+
+  /**
+   * When the solid fills the screen (zoomed in), drop per-pixel work:
+   * lower device pixel ratio + coarser sphere-trace / volume / IBL LOD.
+   * Framed / medium views keep full look-dev quality.
+   */
+  private updateZoomLod(): void {
+    const dist = this.camera.position.distanceTo(this.controls.target);
+    // Keep near/far sane while orbiting so close-ups do not clip or lose Z precision.
+    const near = Math.max(dist / 600, 0.01);
+    const far = Math.max(dist * 40, this.contentRadiusMm * 20, 500);
+    if (
+      Math.abs(this.camera.near - near) / near > 0.15 ||
+      Math.abs(this.camera.far - far) / far > 0.15
+    ) {
+      this.camera.near = near;
+      this.camera.far = far;
+      this.camera.updateProjectionMatrix();
+    }
+
+    const halfFovY = (this.camera.fov * Math.PI) / 360;
+    const viewHalfH = Math.max(dist * Math.tan(halfFovY), 1e-3);
+    // ~1 when content radius fills the vertical FOV; >1 when zoomed past framed.
+    const screenFill = this.contentRadiusMm / viewHalfH;
+
+    // Full quality until the solid is large on screen; then taper toward ~0.38.
+    let quality = 1;
+    if (screenFill > 0.5) {
+      quality = Math.max(0.38, 1.12 - (screenFill - 0.5) * 0.42);
+    }
+
+    if (Math.abs(quality - this.appliedQuality) < 0.04) {
+      return;
+    }
+    this.appliedQuality = quality;
+    this.applyPixelRatioForQuality(quality);
+    this.content.traverse((obj) => {
+      if (obj instanceof Mesh && isRayMarchMesh(obj)) {
+        applyRayMarchQuality(obj, quality);
+      }
+    });
+  }
+
+  private applyPixelRatioForQuality(quality: number): void {
+    const q = Math.min(1, Math.max(0.35, quality));
+    const base = Math.min(window.devicePixelRatio || 1, this.look.maxPixelRatio);
+    // Zoomed-in: pull PR toward ~55% of the look cap (fill-rate limited).
+    const pr = base * (0.55 + 0.45 * q);
+    if (Math.abs(pr - this.appliedPixelRatio) < 0.06) return;
+    this.appliedPixelRatio = pr;
+    this.renderer.setPixelRatio(pr);
+    const width = this.canvas.clientWidth || window.innerWidth;
+    const height = this.canvas.clientHeight || window.innerHeight;
+    this.renderer.setSize(width, height, false);
+  }
 
   private tickFps(): void {
     const now = performance.now();
