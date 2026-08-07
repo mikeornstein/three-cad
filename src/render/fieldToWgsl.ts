@@ -108,13 +108,26 @@ export function fieldNodeToWgsl(
         return { d, w };
       }
       case "cylinder": {
-        const [cx, cy] = node.centerXy;
+        const [c0, c1] = node.centerXy;
         const lo = Math.min(node.zMin, node.zMax);
         const hi = Math.max(node.zMin, node.zMax);
-        const cz = (lo + hi) * 0.5;
-        const hz = (hi - lo) * 0.5;
+        const mid = (lo + hi) * 0.5;
+        const halfLen = (hi - lo) * 0.5;
+        const axis = node.axis ?? "z";
+        // Remap so the extrusion axis becomes local Z for sdCylinderZ.
+        let localExpr: string;
+        if (axis === "x") {
+          // centerXy = (cy, cz); local = (y-cy, z-cz, x-mid)
+          localExpr = `vec3<f32>((${pointExpr}).y - ${f(c0)}, (${pointExpr}).z - ${f(c1)}, (${pointExpr}).x - ${f(mid)})`;
+        } else if (axis === "y") {
+          // centerXy = (cx, cz); local = (x-cx, z-cz, y-mid)
+          localExpr = `vec3<f32>((${pointExpr}).x - ${f(c0)}, (${pointExpr}).z - ${f(c1)}, (${pointExpr}).y - ${f(mid)})`;
+        } else {
+          // centerXy = (cx, cy); local = (x-cx, y-cy, z-mid)
+          localExpr = `vec3<f32>((${pointExpr}).x - ${f(c0)}, (${pointExpr}).y - ${f(c1)}, (${pointExpr}).z - ${f(mid)})`;
+        }
         lines.push(
-          `let ${d} = sdCylinderZ((${pointExpr}) - vec3<f32>(${f(cx)}, ${f(cy)}, ${f(cz)}), ${f(node.radius)}, ${f(hz)});`,
+          `let ${d} = sdCylinderZ(${localExpr}, ${f(node.radius)}, ${f(halfLen)});`,
         );
         lines.push(`let ${w} = ${f(weightOf(node.leafId))};`);
         return { d, w };

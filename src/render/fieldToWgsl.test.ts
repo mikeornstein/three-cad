@@ -5,7 +5,7 @@ import { buildField } from "../eval/buildField";
 import { fieldNodeToWgsl } from "./fieldToWgsl";
 
 describe("fieldNodeToWgsl", () => {
-  it("compiles demo smoothUnion with sampleField / map / matWeight", () => {
+  it("compiles demo cut-cube softUnion sphere with sampleField / map / matWeight", () => {
     const result = fieldNodeToWgsl(demoFieldNode(), {
       leafMaterialWeight: { "demo-cube": 0, "demo-sphere": 1 },
     });
@@ -14,11 +14,12 @@ describe("fieldNodeToWgsl", () => {
     assert.match(result.mapSource, /fn matWeight\(p: vec3<f32>\) -> f32/);
     assert.match(result.mapSource, /sdBox/);
     assert.match(result.mapSource, /sdSphere/);
+    assert.match(result.mapSource, /sdCylinderZ/);
     // Soft-min expands h for distance + material blend.
     assert.match(result.mapSource, /let h\d+/);
     assert.match(result.mapSource, /mix\(/);
     assert.ok(result.tempCount >= 3);
-    // Bounds cover cube [0,100]^3 and sphere at corner r=50
+    // Bounds cover cut cube [0,100]^3 and sphere at corner r=50
     assert.equal(result.bounds.min[0], 0);
     assert.equal(result.bounds.max[0], 150);
   });
@@ -30,12 +31,15 @@ describe("fieldNodeToWgsl", () => {
     assert.equal(wgsl.bounds.min[0], field.bounds.min[0]);
     assert.equal(wgsl.bounds.max[2], field.bounds.max[2]);
 
-    assert.ok(field.evaluate(50, 50, 50) < 0);
+    // Cross-drill leaves cube corners solid; centroid is air.
+    assert.ok(field.evaluate(10, 10, 10) < 0);
+    assert.ok(field.evaluate(50, 50, 50) > 0);
     assert.ok(field.evaluate(500, 500, 500) > 0);
     assert.match(wgsl.mapSource, /100\.0/);
+    assert.match(wgsl.mapSource, /sdCylinderZ/);
   });
 
-  it("blends material weights on smoothUnion leaves", () => {
+  it("emits material weights for cube and sphere leaves", () => {
     const result = fieldNodeToWgsl(demoFieldNode(), {
       leafMaterialWeight: { "demo-cube": 0, "demo-sphere": 1 },
     });

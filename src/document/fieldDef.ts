@@ -33,10 +33,20 @@ export interface SphereNode {
   readonly leafId?: string;
 }
 
+/** Axis a finite cylinder is extruded along. Default `"z"`. */
+export type CylinderAxis = "x" | "y" | "z";
+
 export interface CylinderNode {
   readonly op: "cylinder";
+  /**
+   * Extrusion axis. Default `"z"`.
+   * `centerXy` is the center in the plane perpendicular to the axis:
+   * XY for z, YZ for x, XZ for y.
+   */
+  readonly axis?: CylinderAxis;
   readonly centerXy: readonly [number, number];
   readonly radius: number;
+  /** Extent along `axis` (mm). Field names are historical (Z-only API). */
   readonly zMin: number;
   readonly zMax: number;
   readonly leafId?: string;

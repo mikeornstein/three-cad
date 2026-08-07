@@ -72,9 +72,13 @@ export function sphereSolid(
   };
 }
 
+/** Axis a finite cylinder is extruded along. Default `"z"`. */
+export type CylinderAxis = "x" | "y" | "z";
+
 /**
- * Infinite Z-axis cylinder extruded along Z, then optionally bounded later.
- * Finite cylinder: radius in XY, extent along Z as [zMin, zMax].
+ * Finite cylinder: radius in the plane perpendicular to `axis`,
+ * extent along `axis` as [axisMin, axisMax] (args still named zMin/zMax).
+ * `centerXy` is the center in that perpendicular plane (XY/YZ/XZ).
  */
 export function cylinderSolid(
   centerXy: readonly [number, number],
@@ -82,16 +86,62 @@ export function cylinderSolid(
   zMin: number,
   zMax: number,
   leafId?: string,
+  axis: CylinderAxis = "z",
 ): FieldSolid {
   if (!(radius >= 0)) {
     throw new Error(`cylinderSolid: radius must be non-negative, got ${radius}`);
   }
   const lo = Math.min(zMin, zMax);
   const hi = Math.max(zMin, zMax);
-  const hz = (hi - lo) * 0.5;
-  const cz = (hi + lo) * 0.5;
-  const [cx, cy] = centerXy;
+  const halfLen = (hi - lo) * 0.5;
+  const mid = (hi + lo) * 0.5;
+  const [c0, c1] = centerXy;
 
+  if (axis === "x") {
+    // centerXy = (cy, cz); extent along X
+    const cy = c0;
+    const cz = c1;
+    return {
+      leafId,
+      bounds: aabb(
+        [lo, cy - radius, cz - radius],
+        [hi, cy + radius, cz + radius],
+      ),
+      leafAt: leafId ? () => leafId : undefined,
+      evaluate(x, y, z) {
+        const d = Math.hypot(y - cy, z - cz) - radius;
+        const da = Math.abs(x - mid) - halfLen;
+        const ox = Math.max(d, 0);
+        const oy = Math.max(da, 0);
+        return Math.hypot(ox, oy) + Math.min(Math.max(d, da), 0);
+      },
+    };
+  }
+
+  if (axis === "y") {
+    // centerXy = (cx, cz); extent along Y
+    const cx = c0;
+    const cz = c1;
+    return {
+      leafId,
+      bounds: aabb(
+        [cx - radius, lo, cz - radius],
+        [cx + radius, hi, cz + radius],
+      ),
+      leafAt: leafId ? () => leafId : undefined,
+      evaluate(x, y, z) {
+        const d = Math.hypot(x - cx, z - cz) - radius;
+        const da = Math.abs(y - mid) - halfLen;
+        const ox = Math.max(d, 0);
+        const oy = Math.max(da, 0);
+        return Math.hypot(ox, oy) + Math.min(Math.max(d, da), 0);
+      },
+    };
+  }
+
+  // axis === "z": centerXy = (cx, cy); extent along Z
+  const cx = c0;
+  const cy = c1;
   return {
     leafId,
     bounds: aabb(
@@ -101,12 +151,10 @@ export function cylinderSolid(
     leafAt: leafId ? () => leafId : undefined,
     evaluate(x, y, z) {
       const d = Math.hypot(x - cx, y - cy) - radius;
-      const dy = Math.abs(z - cz) - hz;
+      const da = Math.abs(z - mid) - halfLen;
       const ox = Math.max(d, 0);
-      const oy = Math.max(dy, 0);
-      const outside = Math.hypot(ox, oy);
-      const inside = Math.min(Math.max(d, dy), 0);
-      return outside + inside;
+      const oy = Math.max(da, 0);
+      return Math.hypot(ox, oy) + Math.min(Math.max(d, da), 0);
     },
   };
 }

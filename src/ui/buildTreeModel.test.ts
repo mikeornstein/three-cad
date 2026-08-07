@@ -8,7 +8,7 @@ import {
 } from "./buildTreeModel";
 
 describe("partToBuildTree / fieldNodeToBuildTree", () => {
-  it("builds the demo cube ∪ sphere tree with leaf ids and params", () => {
+  it("builds the demo cut-cube then soft-union sphere tree", () => {
     const root = partToBuildTree(demoPartDef());
     assert.equal(root.op, "part");
     assert.equal(root.path, "part");
@@ -17,6 +17,7 @@ describe("partToBuildTree / fieldNodeToBuildTree", () => {
     assert.ok(root.detail?.includes("demo-body"));
     assert.equal(root.children?.length, 1);
 
+    // Root: smoothUnion(cut-cube, sphere) — no re-cut
     const join = root.children![0]!;
     assert.equal(join.op, "smoothUnion");
     assert.equal(join.leafId, "demo-union");
@@ -24,15 +25,22 @@ describe("partToBuildTree / fieldNodeToBuildTree", () => {
     assert.equal(join.children?.length, 2);
     assert.match(join.detail ?? "", /k=/);
 
-    const box = join.children![0]!;
+    const cutCube = join.children![0]!;
     const sphere = join.children![1]!;
+    assert.equal(cutCube.op, "difference");
+    assert.equal(cutCube.leafId, "cut-cube");
+    assert.equal(cutCube.children?.length, 2);
+
+    const box = cutCube.children![0]!;
+    const unionedCyls = cutCube.children![1]!;
     assert.equal(box.op, "box");
     assert.equal(box.leafId, "demo-cube");
-    assert.equal(box.path, "part/field/a");
     assert.ok(box.detail?.includes("100×100×100"));
+    assert.equal(unionedCyls.op, "smoothUnion");
+    assert.equal(unionedCyls.leafId, "unioned-cyls");
+
     assert.equal(sphere.op, "sphere");
     assert.equal(sphere.leafId, "demo-sphere");
-    assert.equal(sphere.path, "part/field/b");
     assert.ok(sphere.detail?.includes("r=50"));
   });
 

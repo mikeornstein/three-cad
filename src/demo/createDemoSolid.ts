@@ -1,10 +1,12 @@
 /**
  * Scaffold demo solid — proves document → evaluator → viewport (mm, Z-up).
  *
- * Geometry (via demo PartDef / FieldNode):
- * - Cube 100×100×100 mm (cyan resin), corner at origin → [0, 100]³
- * - Sphere diameter 100 mm (amber resin), center at +X/+Y/+Z vertex (100,100,100)
- * - smoothUnion (soft-min) → continuous dual-transparent material gradient
+ * Geometry (via demo PartDef / FieldNode) — build order:
+ * 1. Cube 100×100×100 mm (cyan resin) [0, 100]³
+ * 2. Ø80 mm X/Y/Z cylinders through centroid → smoothUnion (100% overshoot)
+ * 3. Subtract unioned cyls from cube → cut cube
+ * 4. Sphere diameter 100 mm (amber resin) at (100,100,100)
+ * 5. Soft-union sphere with cut cube (k=32)
  *
  * Display: WebGPU sphere-trace with HDRI studio lighting (no mesh).
  */

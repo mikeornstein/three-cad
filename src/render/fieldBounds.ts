@@ -39,13 +39,26 @@ export function boundsOf(node: FieldNode): { min: Vec3; max: Vec3 } {
       };
     }
     case "cylinder": {
-      const [cx, cy] = node.centerXy;
+      const [c0, c1] = node.centerXy;
       const r = node.radius;
       const lo = Math.min(node.zMin, node.zMax);
       const hi = Math.max(node.zMin, node.zMax);
+      const axis = node.axis ?? "z";
+      if (axis === "x") {
+        return {
+          min: [lo, c0 - r, c1 - r],
+          max: [hi, c0 + r, c1 + r],
+        };
+      }
+      if (axis === "y") {
+        return {
+          min: [c0 - r, lo, c1 - r],
+          max: [c0 + r, hi, c1 + r],
+        };
+      }
       return {
-        min: [cx - r, cy - r, lo],
-        max: [cx + r, cy + r, hi],
+        min: [c0 - r, c1 - r, lo],
+        max: [c0 + r, c1 + r, hi],
       };
     }
     case "union":

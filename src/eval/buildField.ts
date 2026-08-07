@@ -30,6 +30,7 @@ export function buildField(node: FieldNode): FieldSolid {
         node.zMin,
         node.zMax,
         node.leafId,
+        node.axis ?? "z",
       );
     case "union":
       return union(buildField(node.a), buildField(node.b), node.leafId);

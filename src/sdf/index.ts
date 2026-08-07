@@ -19,6 +19,7 @@ export {
   cylinderSolid,
   sphereSolid,
 } from "./primitives";
+export type { CylinderAxis } from "./primitives";
 export {
   difference,
   intersection,
