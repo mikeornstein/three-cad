@@ -287,7 +287,8 @@ Do not block assembly workflow on exact curvature.
 - Rebuild only dirty parts when ops land.  
 - Progressive quality (coarse while dragging UI, fine on commit) is allowed.  
 - Ray-marched display is the default; tessellation is export-only (and transitional tests).  
-- **Zoom LOD (interactive display):** when the solid fills the screen, the viewport lowers device pixel ratio and `applyRayMarchQuality` coarsens sphere-trace / volume / IBL uniforms so close-up orbit stays interactive. Framed / medium views keep full look-dev cost. Color and depth share one sphere-trace hit per fragment.  
+- **Zoom LOD (interactive display):** when the solid fills the screen, the viewport lowers device pixel ratio and `applyRayMarchQuality` coarsens sphere-trace / volume / IBL uniforms so close-up orbit stays interactive. Framed / medium views keep full look-dev cost. Color and depth share one sphere-trace hit per fragment.
+- **Still / inspect quality:** after the camera settles (~180 ms + short ramp), the viewport restores full ray-march quality (and a small still boost above interactive max) and may raise device pixel ratio up to `stillMaxPixelRatio` (retina inspect). Motion or orbit interaction snaps back to interactive LOD immediately.  
 
 ---
 

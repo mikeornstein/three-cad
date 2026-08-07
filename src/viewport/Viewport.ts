@@ -59,14 +59,26 @@ export class Viewport {
   private contentRadiusMm = 80;
   /** Last applied pixel ratio (avoid thrashing setPixelRatio). */
   private appliedPixelRatio = 0;
-  /** Last applied ray-march quality in [0,1]. */
+  /** Last applied ray-march quality in [0, ~1.25] (1 = full interactive look-dev). */
   private appliedQuality = -1;
   /**
    * Extra resolution scale from FPS feedback (1 = full, lower = rescue frame time).
    * Multiplied with zoom-based quality; recovers slowly when FPS is healthy.
+   * Ignored while the viewport is fully still (inspect boost).
    */
   private fpsBudgetScale = 1;
   private fpsEma = 60;
+
+  /**
+   * 0 = interacting / damping; 1 = camera settled long enough for inspect quality.
+   * Ramps after STILL_SETTLE_MS so orbit stays snappy.
+   */
+  private stillFactor = 0;
+  private idleMs = 0;
+  private controlsActive = false;
+  private readonly lastCamPos = new Vector3();
+  private readonly lastTarget = new Vector3();
+  private camSampled = false;
 
   private readonly fpsEl: HTMLElement;
   private fpsFrames = 0;
@@ -74,6 +86,16 @@ export class Viewport {
   /** Callbacks run each frame after controls/camera update, before render. */
   private readonly frameHooks = new Set<(dtMs: number) => void>();
   private lastFrameTime = 0;
+
+  /** Wait after last camera motion before raising quality. */
+  private static readonly STILL_SETTLE_MS = 180;
+  /** Soft ramp from interactive → still quality. */
+  private static readonly STILL_RAMP_MS = 220;
+  /**
+   * Still-mode quality ceiling (>1 adds extra sphere-trace steps / finer eps).
+   * Volume path is already maxed at q=1; extra is surface + DPR.
+   */
+  private static readonly STILL_QUALITY = 1.2;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -97,6 +119,8 @@ export class Viewport {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.screenSpacePanning = true;
+    this.controls.addEventListener("start", this.onControlsStart);
+    this.controls.addEventListener("end", this.onControlsEnd);
 
     this.fpsEl =
       document.getElementById("fps-meter") ?? ensureFpsElement(canvas);
@@ -105,6 +129,16 @@ export class Viewport {
     this.onResize();
     window.addEventListener("resize", this.onResize);
   }
+
+  private readonly onControlsStart = (): void => {
+    this.controlsActive = true;
+    this.idleMs = 0;
+    this.stillFactor = 0;
+  };
+
+  private readonly onControlsEnd = (): void => {
+    this.controlsActive = false;
+  };
 
   getSceneLook(): SceneLook {
     return this.look;
@@ -301,6 +335,8 @@ export class Viewport {
     this.disposed = true;
     cancelAnimationFrame(this.animationId);
     window.removeEventListener("resize", this.onResize);
+    this.controls.removeEventListener("start", this.onControlsStart);
+    this.controls.removeEventListener("end", this.onControlsEnd);
     this.frameHooks.clear();
     this.clearGroup(this.content);
     this.controls.dispose();
@@ -375,6 +411,7 @@ export class Viewport {
     this.lastFrameTime = now;
     this.controls.update();
     this.camera.updateMatrixWorld();
+    this.updateStillFactor(dtMs);
     for (const hook of this.frameHooks) {
       hook(dtMs);
     }
@@ -384,9 +421,45 @@ export class Viewport {
   };
 
   /**
+   * Track camera rest. Damping after orbit release keeps stillFactor at 0 until
+   * position/target stop changing, then ramps inspect quality.
+   */
+  private updateStillFactor(dtMs: number): void {
+    const pos = this.camera.position;
+    const target = this.controls.target;
+    // ~0.03 mm / 0.03 mm on target — below noticeable orbit jitter.
+    const moved =
+      !this.camSampled ||
+      pos.distanceToSquared(this.lastCamPos) > 1e-3 ||
+      target.distanceToSquared(this.lastTarget) > 1e-3;
+    this.lastCamPos.copy(pos);
+    this.lastTarget.copy(target);
+    this.camSampled = true;
+
+    if (this.controlsActive || moved) {
+      this.idleMs = 0;
+      // Snap down immediately so orbit never pays still fill-rate.
+      this.stillFactor = 0;
+      return;
+    }
+
+    this.idleMs += dtMs;
+    const settle = Viewport.STILL_SETTLE_MS;
+    const ramp = Viewport.STILL_RAMP_MS;
+    if (this.idleMs <= settle) {
+      this.stillFactor = 0;
+    } else {
+      this.stillFactor = Math.min(1, (this.idleMs - settle) / ramp);
+    }
+  }
+
+  /**
    * Drop fill-rate + per-pixel shader work when zoomed in or when FPS sags.
    * Glass volume integration is quadratic-ish with on-screen solid area; zoom LOD
    * must be aggressive or close-up orbit freezes on laptop GPUs.
+   *
+   * When the camera is still, blend back to full (or slightly above) look-dev
+   * quality and a higher pixel-ratio cap — inspect mode pays GPU only at rest.
    */
   private updateZoomLod(): void {
     const dist = this.camera.position.distanceTo(this.controls.target);
@@ -416,7 +489,14 @@ export class Viewport {
       zoomQ = Math.max(0.12, 1 - (screenFill - framedFill) * 0.95);
     }
 
-    const quality = Math.min(1, Math.max(0.12, zoomQ * this.fpsBudgetScale));
+    const interactiveQ = Math.min(
+      1,
+      Math.max(0.12, zoomQ * this.fpsBudgetScale),
+    );
+    // At rest: restore full look-dev (and a small still boost above q=1).
+    const stillTarget = Viewport.STILL_QUALITY;
+    const quality =
+      interactiveQ + (stillTarget - interactiveQ) * this.stillFactor;
 
     // Always keep shader uniforms in sync (cheap). PR tiers are applied inside
     // applyPixelRatioForQuality with strong hysteresis.
@@ -435,19 +515,33 @@ export class Viewport {
    * Pixel-ratio changes reallocate the drawing buffer — do them rarely, in coarse
    * steps only. Fine LOD is the shader uniforms (free). Thrashing PR while the
    * user dollys is a major source of zoom jank.
+   *
+   * Still mode may raise the cap above interactive maxPixelRatio (retina inspect).
    */
   private applyPixelRatioForQuality(quality: number, screenFill = 0.78): void {
-    const q = Math.min(1, Math.max(0.12, quality));
-    const base = Math.min(window.devicePixelRatio || 1, this.look.maxPixelRatio);
-    // Coarse tiers only — never continuous PR while orbiting.
+    const dpr = window.devicePixelRatio || 1;
+    const interactiveCap = this.look.maxPixelRatio;
+    const stillCap = Math.max(
+      interactiveCap,
+      this.look.stillMaxPixelRatio ?? interactiveCap,
+    );
+    // Commit higher PR only once fully settled so we do not reallocate mid-ramp.
+    const useStillPr = this.stillFactor >= 1;
+    const base = Math.min(dpr, useStillPr ? stillCap : interactiveCap);
+
+    // Coarse tiers only while interacting — never continuous PR while orbiting.
     let tier = 1;
-    if (screenFill > 2.2 || q < 0.25 || this.fpsBudgetScale < 0.55) {
-      tier = 0.4;
-    } else if (screenFill > 1.35 || q < 0.5 || this.fpsBudgetScale < 0.75) {
-      tier = 0.65;
+    if (!useStillPr) {
+      const q = Math.min(1, Math.max(0.12, quality));
+      if (screenFill > 2.2 || q < 0.25 || this.fpsBudgetScale < 0.55) {
+        tier = 0.4;
+      } else if (screenFill > 1.35 || q < 0.5 || this.fpsBudgetScale < 0.75) {
+        tier = 0.65;
+      }
     }
     const pr = Math.max(0.3, base * tier);
     // Large hysteresis so we do not flip tiers every frame at a boundary.
+    // Still→interactive must still drop when leaving still (rel often > 0.2).
     if (this.appliedPixelRatio > 0) {
       const rel = Math.abs(pr - this.appliedPixelRatio) / this.appliedPixelRatio;
       if (rel < 0.2) return;
