@@ -52,6 +52,12 @@ export class Viewport {
   private appliedPixelRatio = 0;
   /** Last applied ray-march quality in [0,1]. */
   private appliedQuality = -1;
+  /**
+   * Extra resolution scale from FPS feedback (1 = full, lower = rescue frame time).
+   * Multiplied with zoom-based quality; recovers slowly when FPS is healthy.
+   */
+  private fpsBudgetScale = 1;
+  private fpsEma = 60;
 
   private readonly fpsEl: HTMLElement;
   private fpsFrames = 0;
@@ -338,9 +344,9 @@ export class Viewport {
   };
 
   /**
-   * When the solid fills the screen (zoomed in), drop per-pixel work:
-   * lower device pixel ratio + coarser sphere-trace / volume / IBL LOD.
-   * Framed / medium views keep full look-dev quality.
+   * Drop fill-rate + per-pixel shader work when zoomed in or when FPS sags.
+   * Glass volume integration is quadratic-ish with on-screen solid area; zoom LOD
+   * must be aggressive or close-up orbit freezes on laptop GPUs.
    */
   private updateZoomLod(): void {
     const dist = this.camera.position.distanceTo(this.controls.target);
@@ -358,20 +364,25 @@ export class Viewport {
 
     const halfFovY = (this.camera.fov * Math.PI) / 360;
     const viewHalfH = Math.max(dist * Math.tan(halfFovY), 1e-3);
-    // ~1 when content radius fills the vertical FOV; >1 when zoomed past framed.
+    // ~0.74 at default frameObject() (radius fills ~74% of half-FOV). ≫1 when zoomed in.
     const screenFill = this.contentRadiusMm / viewHalfH;
 
-    // Full quality until the solid is large on screen; then taper toward ~0.38.
-    let quality = 1;
-    if (screenFill > 0.5) {
-      quality = Math.max(0.38, 1.12 - (screenFill - 0.5) * 0.42);
+    // Keep full look-dev through the framed view; only pull quality once past it.
+    // Past framed: drop fast into the cheap volume path (q < 0.45 → no swirl/specks).
+    const framedFill = 0.78;
+    let zoomQ = 1;
+    if (screenFill > framedFill) {
+      // fill 0.78→1.0, 1.2→0.55, 1.6→0.25, 2.2→0.12
+      zoomQ = Math.max(0.12, 1 - (screenFill - framedFill) * 0.95);
     }
 
-    if (Math.abs(quality - this.appliedQuality) < 0.04) {
+    const quality = Math.min(1, Math.max(0.12, zoomQ * this.fpsBudgetScale));
+
+    if (Math.abs(quality - this.appliedQuality) < 0.025) {
       return;
     }
     this.appliedQuality = quality;
-    this.applyPixelRatioForQuality(quality);
+    this.applyPixelRatioForQuality(quality, screenFill);
     this.content.traverse((obj) => {
       if (obj instanceof Mesh && isRayMarchMesh(obj)) {
         applyRayMarchQuality(obj, quality);
@@ -379,12 +390,19 @@ export class Viewport {
     });
   }
 
-  private applyPixelRatioForQuality(quality: number): void {
-    const q = Math.min(1, Math.max(0.35, quality));
+  private applyPixelRatioForQuality(quality: number, screenFill = 0.78): void {
+    const q = Math.min(1, Math.max(0.12, quality));
     const base = Math.min(window.devicePixelRatio || 1, this.look.maxPixelRatio);
-    // Zoomed-in: pull PR toward ~55% of the look cap (fill-rate limited).
-    const pr = base * (0.55 + 0.45 * q);
-    if (Math.abs(pr - this.appliedPixelRatio) < 0.06) return;
+    // Bound pixel count roughly by on-screen solid size once past framed fill.
+    const framedFill = 0.78;
+    const fillScale =
+      screenFill <= framedFill
+        ? 1
+        : Math.min(1, framedFill / screenFill);
+    // When quality is crushed, also pull PR (0.12 → ~0.38× base).
+    const qualityScale = 0.28 + 0.72 * q;
+    const pr = Math.max(0.28, base * fillScale * qualityScale * this.fpsBudgetScale);
+    if (Math.abs(pr - this.appliedPixelRatio) < 0.035) return;
     this.appliedPixelRatio = pr;
     this.renderer.setPixelRatio(pr);
     const width = this.canvas.clientWidth || window.innerWidth;
@@ -401,8 +419,20 @@ export class Viewport {
     }
     this.fpsFrames += 1;
     const elapsed = now - this.fpsWindowStart;
-    if (elapsed >= 500) {
+    if (elapsed >= 400) {
       const fps = (this.fpsFrames * 1000) / elapsed;
+      this.fpsEma = this.fpsEma * 0.65 + fps * 0.35;
+      // Target ~30 FPS interactive. Drop budget fast when cold; recover slowly.
+      if (this.fpsEma < 24) {
+        this.fpsBudgetScale = Math.max(0.35, this.fpsBudgetScale * 0.88);
+        this.appliedQuality = -1; // force reapply next frame
+      } else if (this.fpsEma < 30) {
+        this.fpsBudgetScale = Math.max(0.4, this.fpsBudgetScale * 0.96);
+        this.appliedQuality = -1;
+      } else if (this.fpsEma > 48 && this.fpsBudgetScale < 1) {
+        this.fpsBudgetScale = Math.min(1, this.fpsBudgetScale * 1.03);
+        this.appliedQuality = -1;
+      }
       this.fpsEl.textContent = `${fps.toFixed(0)} FPS`;
       this.fpsEl.dataset.fps = fps < 20 ? "low" : fps < 40 ? "mid" : "high";
       this.fpsFrames = 0;

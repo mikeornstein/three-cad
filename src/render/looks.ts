@@ -57,7 +57,8 @@ export const LOOK_MAT_REF_01: SceneLook = {
   rimColor: [0.12, 0.18, 0.28],
   gridCenter: 0x5a6570,
   gridLine: 0x1e242c,
-  maxPixelRatio: 1.5,
+  // Cap ≤1 so retina fill-rate does not melt the glass volume path when framed.
+  maxPixelRatio: 1,
   maxSteps: 80,
   surfaceEpsMm: 0.06,
   envIntensity: 1.0,
