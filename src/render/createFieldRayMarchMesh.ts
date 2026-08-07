@@ -103,12 +103,20 @@ export interface FieldRayMarchMesh extends Mesh {
 
 export const LIVE_SPHERE_USER = "threeCadLiveSpheres";
 
-/** 1×1 black float texture so the shader always has a valid env binding. */
+/**
+ * Small black float texture so the shader always has a valid env binding.
+ * ≥4×4 avoids Safari/iOS WebGPU quirks with 1×1 / 2×2 textures reported in
+ * other engines; values are pure black either way.
+ */
 let fallbackEnv: DataTexture | null = null;
 function getFallbackEnv(): DataTexture {
   if (fallbackEnv) return fallbackEnv;
-  const data = new Float32Array([0, 0, 0, 1]);
-  fallbackEnv = new DataTexture(data, 1, 1, RGBAFormat, FloatType);
+  const size = 4;
+  const data = new Float32Array(size * size * 4);
+  for (let i = 0; i < size * size; i++) {
+    data[i * 4 + 3] = 1;
+  }
+  fallbackEnv = new DataTexture(data, size, size, RGBAFormat, FloatType);
   fallbackEnv.magFilter = LinearFilter;
   fallbackEnv.minFilter = LinearFilter;
   fallbackEnv.needsUpdate = true;

@@ -4,9 +4,14 @@ import { createDemoSolid } from "./demo/createDemoSolid";
 import { SphereCursorFollow } from "./demo/sphereCursorFollow";
 import type { LiveSphereHandle } from "./render/createFieldRayMarchMesh";
 import { DEFAULT_LIBRARY_ENTRY } from "./render/library";
+import { withMobileCaps } from "./render/looks";
 import { loadStudioEnvironment } from "./render/studioEnv";
 import { BuildTreePanel } from "./ui/BuildTreePanel";
 import { OnscreenConsole } from "./ui/OnscreenConsole";
+import {
+  createWebGpuDevice,
+  isMobileLikeClient,
+} from "./viewport/createWebGpuDevice";
 import { Viewport } from "./viewport/Viewport";
 
 async function main(): Promise<void> {
@@ -30,22 +35,28 @@ async function main(): Promise<void> {
     : null;
   buildTree?.setPart(demoPartDef());
 
-  if (typeof navigator === "undefined" || !navigator.gpu) {
-    const msg =
-      "WebGPU is required for three-cad display. Use Chrome, Edge, Firefox, or Safari 26+ with WebGPU enabled.";
+  let gpuInfo;
+  try {
+    gpuInfo = await createWebGpuDevice();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("WebGPU device acquisition failed", err);
     screenConsole?.log(`error: ${msg}`);
-    throw new Error(msg);
+    throw err;
   }
 
-  const viewport = new Viewport(canvas);
+  const viewport = new Viewport(canvas, { device: gpuInfo.device });
   try {
     await viewport.init();
   } catch (err) {
     console.error("WebGPU init failed", err);
-    screenConsole?.log(`error: WebGPU init failed — ${String(err)}`);
+    screenConsole?.log(
+      `error: WebGPU init failed — ${err instanceof Error ? err.message : String(err)}`,
+    );
     throw err;
   }
 
+  screenConsole?.log(gpuInfo.summary);
   screenConsole?.log(
     "kernel: SDF field solid · display: WebGPU sphere-trace (WGSL, no mesh)",
   );
@@ -56,7 +67,14 @@ async function main(): Promise<void> {
     "build tree (left): construction ops · click row to copy summary",
   );
 
-  const look = DEFAULT_LIBRARY_ENTRY.look;
+  const mobile = isMobileLikeClient();
+  const baseLook = DEFAULT_LIBRARY_ENTRY.look;
+  const look = mobile ? withMobileCaps(baseLook) : baseLook;
+  if (mobile) {
+    screenConsole?.log(
+      `quality: mobile caps (maxSteps ${look.maxSteps}, maxPixelRatio ${look.maxPixelRatio})`,
+    );
+  }
   viewport.applyLook(look);
 
   let envMap = null as Awaited<
@@ -65,8 +83,6 @@ async function main(): Promise<void> {
   try {
     envMap = await loadStudioEnvironment(viewport.renderer);
     viewport.setStudioEnvironment(envMap);
-    // Sync look key/fill with HDR probes for the field mesh uniforms.
-    look; // look is const from library; probes applied via env on mesh
     screenConsole?.log(
       `env: HDRI «${envMap.id}» (Z-up rotated, bg blur ${look.backgroundBlurriness}) · IBL ${look.envIntensity}`,
     );

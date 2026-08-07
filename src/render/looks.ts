@@ -91,3 +91,16 @@ export const LOOK_INSPECT: SceneLook = {
 
 /** Product default: glass studio (mat_ref_01). */
 export const DEFAULT_LOOK: SceneLook = LOOK_MAT_REF_01;
+
+/**
+ * Lower sphere-trace budget for coarse-pointer / phone clients.
+ * Keeps material look; only quality knobs change.
+ */
+export function withMobileCaps(look: SceneLook): SceneLook {
+  return {
+    ...look,
+    maxPixelRatio: Math.min(look.maxPixelRatio, 1),
+    maxSteps: Math.min(look.maxSteps, 48),
+    surfaceEpsMm: Math.max(look.surfaceEpsMm, 0.08),
+  };
+}
