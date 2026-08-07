@@ -23,6 +23,8 @@ Open the printed local URL (app base is `/three-cad/`, same as production). Orbi
 
 **Requires WebGPU** (Chrome, Edge, Firefox, or Safari 26+). There is no WebGL display fallback.
 
+WebGPU only exists in a **secure context**: `https://…` or `http://localhost` / `http://127.0.0.1`. Opening the dev server via a LAN IP (`http://192.168.x.x`) hides `navigator.gpu` — use the [GitHub Pages deploy](https://mikeornstein.github.io/three-cad/), localhost on the same machine, or an HTTPS tunnel for phone testing.
+
 ```bash
 npm run build      # typecheck + production bundle
 npm run typecheck  # tsc only

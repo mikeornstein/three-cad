@@ -30,6 +30,15 @@ import type { StudioEnvironment } from "../render/studioEnv";
 /** World units are millimeters. Right-handed, Z-up. */
 export const MM = 1;
 
+export interface ViewportOptions {
+  /**
+   * Pre-created GPUDevice (from createWebGpuDevice). Required so Three.js
+   * does not call requestAdapter({ featureLevel: "compatibility" }), which
+   * fails on Safari and other browsers that omit that option.
+   */
+  readonly device: GPUDevice;
+}
+
 export class Viewport {
   readonly scene = new Scene();
   readonly camera: PerspectiveCamera;
@@ -66,7 +75,10 @@ export class Viewport {
   private readonly frameHooks = new Set<(dtMs: number) => void>();
   private lastFrameTime = 0;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  constructor(
+    private readonly canvas: HTMLCanvasElement,
+    options: ViewportOptions,
+  ) {
     this.scene.add(this.root);
     this.root.add(this.content);
 
@@ -77,6 +89,8 @@ export class Viewport {
       canvas,
       antialias: false,
       alpha: false,
+      // Skip Three's hard-coded featureLevel: "compatibility" adapter path.
+      device: options.device,
     });
 
     this.controls = new OrbitControls(this.camera, this.canvas);
@@ -223,17 +237,19 @@ export class Viewport {
 
   async init(): Promise<void> {
     if (this.initialized) return;
-    if (typeof navigator === "undefined" || !navigator.gpu) {
+    try {
+      await this.renderer.init();
+    } catch (err) {
       throw new Error(
-        "WebGPU is required for three-cad display. Use a browser with WebGPU enabled (Chrome, Edge, Firefox, or Safari 26+).",
+        `WebGPURenderer.init failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    await this.renderer.init();
     const backend = this.renderer.backend as { isWebGPUBackend?: boolean };
     if (backend.isWebGPUBackend !== true) {
       this.renderer.dispose();
       throw new Error(
-        "WebGPU backend unavailable (Three.js fell back to WebGL2). three-cad requires a real WebGPU device.",
+        "WebGPU backend unavailable (Three.js fell back to WebGL2). " +
+          "Pass a real GPUDevice from createWebGpuDevice() — do not rely on Three's featureLevel adapter path.",
       );
     }
     this.initialized = true;
