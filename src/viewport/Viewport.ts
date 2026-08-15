@@ -20,6 +20,8 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import {
   applyRayMarchQuality,
   isRayMarchMesh,
+  LIVE_SPHERE_USER,
+  type LiveSphereHandle,
 } from "../render/createFieldRayMarchMesh";
 import {
   DEFAULT_LOOK,
@@ -64,21 +66,19 @@ export class Viewport {
   /**
    * Extra resolution scale from FPS feedback (1 = full, lower = rescue frame time).
    * Multiplied with zoom-based quality; recovers slowly when FPS is healthy.
-   * Ignored while the viewport is fully still (inspect boost).
    */
   private fpsBudgetScale = 1;
   private fpsEma = 60;
 
-  /**
-   * 0 = interacting / damping; 1 = camera settled long enough for inspect quality.
-   * Ramps after STILL_SETTLE_MS so orbit stays snappy.
-   */
-  private stillFactor = 0;
   private idleMs = 0;
   private controlsActive = false;
   private readonly lastCamPos = new Vector3();
   private readonly lastTarget = new Vector3();
   private camSampled = false;
+  /** True after resize / look / content / env until the next shaded frame. */
+  private forceDirty = true;
+  private holding = false;
+  private lastLiveFingerprint = "";
 
   private readonly fpsEl: HTMLElement;
   private fpsFrames = 0;
@@ -87,15 +87,8 @@ export class Viewport {
   private readonly frameHooks = new Set<(dtMs: number) => void>();
   private lastFrameTime = 0;
 
-  /** Wait after last camera motion before raising quality. */
-  private static readonly STILL_SETTLE_MS = 180;
-  /** Soft ramp from interactive → still quality. */
-  private static readonly STILL_RAMP_MS = 220;
-  /**
-   * Still-mode quality ceiling (>1 adds extra sphere-trace steps / finer eps).
-   * Volume path is already maxed at q=1; extra is surface + DPR.
-   */
-  private static readonly STILL_QUALITY = 1.2;
+  /** Wait after last camera / live-sphere motion before holding the frame. */
+  private static readonly STILL_SETTLE_MS = 80;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -133,7 +126,6 @@ export class Viewport {
   private readonly onControlsStart = (): void => {
     this.controlsActive = true;
     this.idleMs = 0;
-    this.stillFactor = 0;
   };
 
   private readonly onControlsEnd = (): void => {
@@ -159,6 +151,7 @@ export class Viewport {
     this.studioEnv = env;
     this.applyEnvironmentToScene();
     this.rebuildLights();
+    this.invalidate();
   }
 
   applyLook(look: SceneLook): void {
@@ -170,6 +163,14 @@ export class Viewport {
     this.applyEnvironmentToScene();
     this.rebuildLights();
     this.rebuildScaleCues();
+    this.invalidate();
+  }
+
+  /** Force the next frame to shade (resize, look, content, env). */
+  invalidate(): void {
+    this.forceDirty = true;
+    this.holding = false;
+    this.idleMs = 0;
   }
 
   private applyEnvironmentToScene(): void {
@@ -317,6 +318,7 @@ export class Viewport {
     // Reset LOD so the next frame reapplies full quality at the framed view.
     this.appliedQuality = -1;
     this.appliedPixelRatio = 0;
+    this.invalidate();
   }
 
   /**
@@ -398,6 +400,7 @@ export class Viewport {
     this.appliedPixelRatio = 0;
     this.applyPixelRatioForQuality(this.appliedQuality < 0 ? 1 : this.appliedQuality);
     this.renderer.setSize(width, height, false);
+    this.invalidate();
   };
 
   private readonly loop = (): void => {
@@ -411,46 +414,83 @@ export class Viewport {
     this.lastFrameTime = now;
     this.controls.update();
     this.camera.updateMatrixWorld();
-    this.updateStillFactor(dtMs);
+    const camMoved = this.updateStillFactor(dtMs);
     for (const hook of this.frameHooks) {
       hook(dtMs);
     }
+    const liveMoved = this.liveSphereChanged();
+    const dirty =
+      this.forceDirty ||
+      this.controlsActive ||
+      camMoved ||
+      liveMoved ||
+      this.idleMs < Viewport.STILL_SETTLE_MS;
+
+    if (!dirty) {
+      this.enterHold();
+      return;
+    }
+
+    this.forceDirty = false;
+    this.holding = false;
     this.updateZoomLod();
     this.renderer.render(this.scene, this.camera);
     this.tickFps();
   };
 
   /**
-   * Track camera rest. Damping after orbit release keeps stillFactor at 0 until
-   * position/target stop changing, then ramps inspect quality.
+   * Track camera rest. Damping after orbit release keeps idleMs at 0 until
+   * position/target stop changing. Returns true when the camera moved this frame.
    */
-  private updateStillFactor(dtMs: number): void {
+  private updateStillFactor(dtMs: number): boolean {
     const pos = this.camera.position;
     const target = this.controls.target;
-    // ~0.03 mm / 0.03 mm on target — below noticeable orbit jitter.
+    // ~0.5 mm — must sit above OrbitControls damping leftovers at framed distance.
+    const moveEpsSq = 0.25;
     const moved =
       !this.camSampled ||
-      pos.distanceToSquared(this.lastCamPos) > 1e-3 ||
-      target.distanceToSquared(this.lastTarget) > 1e-3;
+      pos.distanceToSquared(this.lastCamPos) > moveEpsSq ||
+      target.distanceToSquared(this.lastTarget) > moveEpsSq;
     this.lastCamPos.copy(pos);
     this.lastTarget.copy(target);
     this.camSampled = true;
 
     if (this.controlsActive || moved) {
       this.idleMs = 0;
-      // Snap down immediately so orbit never pays still fill-rate.
-      this.stillFactor = 0;
-      return;
+      return moved;
     }
 
     this.idleMs += dtMs;
-    const settle = Viewport.STILL_SETTLE_MS;
-    const ramp = Viewport.STILL_RAMP_MS;
-    if (this.idleMs <= settle) {
-      this.stillFactor = 0;
-    } else {
-      this.stillFactor = Math.min(1, (this.idleMs - settle) / ramp);
-    }
+    return false;
+  }
+
+  /** Snapshot live sphere uniforms; true when center/radius changed this frame. */
+  private liveSphereChanged(): boolean {
+    let fp = "";
+    this.content.traverse((obj) => {
+      if (!(obj instanceof Mesh) || !isRayMarchMesh(obj)) return;
+      const handles = obj.userData[LIVE_SPHERE_USER] as
+        | LiveSphereHandle[]
+        | undefined;
+      if (!handles) return;
+      for (const h of handles) {
+        const c = h.getCenter();
+        fp += `${h.leafId}:${c.x.toFixed(3)},${c.y.toFixed(3)},${c.z.toFixed(3)},${h.getRadius().toFixed(3)};`;
+      }
+    });
+    if (fp === this.lastLiveFingerprint) return false;
+    this.lastLiveFingerprint = fp;
+    this.idleMs = 0;
+    return true;
+  }
+
+  private enterHold(): void {
+    if (this.holding) return;
+    this.holding = true;
+    this.fpsFrames = 0;
+    this.fpsWindowStart = 0;
+    this.fpsEl.textContent = "hold";
+    this.fpsEl.dataset.fps = "high";
   }
 
   /**
@@ -458,8 +498,8 @@ export class Viewport {
    * Glass volume integration is quadratic-ish with on-screen solid area; zoom LOD
    * must be aggressive or close-up orbit freezes on laptop GPUs.
    *
-   * When the camera is still, blend back to full (or slightly above) look-dev
-   * quality and a higher pixel-ratio cap — inspect mode pays GPU only at rest.
+   * Held frames skip this entirely — we never raise fill-rate just because
+   * the camera stopped.
    */
   private updateZoomLod(): void {
     const dist = this.camera.position.distanceTo(this.controls.target);
@@ -489,14 +529,10 @@ export class Viewport {
       zoomQ = Math.max(0.12, 1 - (screenFill - framedFill) * 0.95);
     }
 
-    const interactiveQ = Math.min(
+    const quality = Math.min(
       1,
       Math.max(0.12, zoomQ * this.fpsBudgetScale),
     );
-    // At rest: restore full look-dev (and a small still boost above q=1).
-    const stillTarget = Viewport.STILL_QUALITY;
-    const quality =
-      interactiveQ + (stillTarget - interactiveQ) * this.stillFactor;
 
     // Always keep shader uniforms in sync (cheap). PR tiers are applied inside
     // applyPixelRatioForQuality with strong hysteresis.
@@ -516,32 +552,22 @@ export class Viewport {
    * steps only. Fine LOD is the shader uniforms (free). Thrashing PR while the
    * user dollys is a major source of zoom jank.
    *
-   * Still mode may raise the cap above interactive maxPixelRatio (retina inspect).
+   * Pixel ratio never goes above interactive maxPixelRatio — still frames
+   * hold the last buffer instead of spending retina fill-rate.
    */
   private applyPixelRatioForQuality(quality: number, screenFill = 0.78): void {
     const dpr = window.devicePixelRatio || 1;
-    const interactiveCap = this.look.maxPixelRatio;
-    const stillCap = Math.max(
-      interactiveCap,
-      this.look.stillMaxPixelRatio ?? interactiveCap,
-    );
-    // Commit higher PR only once fully settled so we do not reallocate mid-ramp.
-    const useStillPr = this.stillFactor >= 1;
-    const base = Math.min(dpr, useStillPr ? stillCap : interactiveCap);
+    const base = Math.min(dpr, this.look.maxPixelRatio);
 
-    // Coarse tiers only while interacting — never continuous PR while orbiting.
     let tier = 1;
-    if (!useStillPr) {
-      const q = Math.min(1, Math.max(0.12, quality));
-      if (screenFill > 2.2 || q < 0.25 || this.fpsBudgetScale < 0.55) {
-        tier = 0.4;
-      } else if (screenFill > 1.35 || q < 0.5 || this.fpsBudgetScale < 0.75) {
-        tier = 0.65;
-      }
+    const q = Math.min(1, Math.max(0.12, quality));
+    if (screenFill > 2.2 || q < 0.25 || this.fpsBudgetScale < 0.55) {
+      tier = 0.4;
+    } else if (screenFill > 1.35 || q < 0.5 || this.fpsBudgetScale < 0.75) {
+      tier = 0.65;
     }
     const pr = Math.max(0.3, base * tier);
     // Large hysteresis so we do not flip tiers every frame at a boundary.
-    // Still→interactive must still drop when leaving still (rel often > 0.2).
     if (this.appliedPixelRatio > 0) {
       const rel = Math.abs(pr - this.appliedPixelRatio) / this.appliedPixelRatio;
       if (rel < 0.2) return;
