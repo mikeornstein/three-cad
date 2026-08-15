@@ -28,6 +28,11 @@ import {
   type SceneLook,
 } from "../render/looks";
 import type { StudioEnvironment } from "../render/studioEnv";
+import {
+  createDisplayPipeline,
+  type DisplayPipeline,
+} from "./createDisplayPipeline";
+import { INTERNAL_SCALE_HIGH, internalScaleFromFps } from "./internalScale";
 
 /** World units are millimeters. Right-handed, Z-up. */
 export const MM = 1;
@@ -61,6 +66,9 @@ export class Viewport {
   private contentRadiusMm = 80;
   /** Last applied pixel ratio (avoid thrashing setPixelRatio). */
   private appliedPixelRatio = 0;
+  /** Last TAAU input scale in (0, 1]. */
+  private appliedInternalScale = INTERNAL_SCALE_HIGH;
+  private display: DisplayPipeline | null = null;
   /** Last applied ray-march quality in [0, ~1.25] (1 = full interactive look-dev). */
   private appliedQuality = -1;
   /**
@@ -288,6 +296,16 @@ export class Viewport {
       );
     }
     this.initialized = true;
+    try {
+      this.display = createDisplayPipeline(
+        this.renderer,
+        this.scene,
+        this.camera,
+      );
+    } catch (err) {
+      console.warn("Display pipeline (TAAU) failed — falling back to direct render", err);
+      this.display = null;
+    }
     this.loop();
   }
 
@@ -342,6 +360,8 @@ export class Viewport {
     this.frameHooks.clear();
     this.clearGroup(this.content);
     this.controls.dispose();
+    this.display?.dispose();
+    this.display = null;
     this.renderer.dispose();
   }
 
@@ -433,8 +453,16 @@ export class Viewport {
 
     this.forceDirty = false;
     this.holding = false;
+    if (liveMoved) {
+      this.display?.resetHistory();
+    }
     this.updateZoomLod();
-    this.renderer.render(this.scene, this.camera);
+    this.display?.setScale(this.appliedInternalScale);
+    if (this.display) {
+      this.display.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
     this.tickFps();
   };
 
@@ -552,21 +580,12 @@ export class Viewport {
    * steps only. Fine LOD is the shader uniforms (free). Thrashing PR while the
    * user dollys is a major source of zoom jank.
    *
-   * Pixel ratio never goes above interactive maxPixelRatio — still frames
-   * hold the last buffer instead of spending retina fill-rate.
+   * Drawing-buffer pixel ratio stays at the interactive cap. Fill-rate LOD is
+   * the TAAU input scale, not a blurry canvas downsample.
    */
-  private applyPixelRatioForQuality(quality: number, screenFill = 0.78): void {
+  private applyPixelRatioForQuality(_quality: number, _screenFill = 0.78): void {
     const dpr = window.devicePixelRatio || 1;
-    const base = Math.min(dpr, this.look.maxPixelRatio);
-
-    let tier = 1;
-    const q = Math.min(1, Math.max(0.12, quality));
-    if (screenFill > 2.2 || q < 0.25 || this.fpsBudgetScale < 0.55) {
-      tier = 0.4;
-    } else if (screenFill > 1.35 || q < 0.5 || this.fpsBudgetScale < 0.75) {
-      tier = 0.65;
-    }
-    const pr = Math.max(0.3, base * tier);
+    const pr = Math.min(dpr, this.look.maxPixelRatio);
     // Large hysteresis so we do not flip tiers every frame at a boundary.
     if (this.appliedPixelRatio > 0) {
       const rel = Math.abs(pr - this.appliedPixelRatio) / this.appliedPixelRatio;
@@ -601,6 +620,10 @@ export class Viewport {
       } else if (this.fpsEma > 48 && this.fpsBudgetScale < 1) {
         this.fpsBudgetScale = Math.min(1, this.fpsBudgetScale * 1.03);
         this.appliedQuality = -1;
+      }
+      const scale = internalScaleFromFps(this.fpsEma, this.appliedInternalScale);
+      if (Math.abs(scale - this.appliedInternalScale) >= 0.02) {
+        this.appliedInternalScale = scale;
       }
       this.fpsEl.textContent = `${fps.toFixed(0)} FPS`;
       this.fpsEl.dataset.fps = fps < 20 ? "low" : fps < 40 ? "mid" : "high";
