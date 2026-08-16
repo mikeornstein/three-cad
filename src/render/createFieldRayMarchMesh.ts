@@ -91,7 +91,7 @@ export interface FieldRayMarchOptions {
   /** Multiplier on HDR samples. Default from look.envIntensity or 1. */
   readonly envIntensity?: number;
   /**
-   * Sphere leaves whose center/radius are GPU uniforms (cursor follow, animation).
+   * Sphere leaves whose center/radius are GPU uniforms (grab-drag, animation).
    * Smooth-union and materials re-evaluate every frame without recompiling WGSL.
    */
   readonly liveSpheres?: readonly LiveSphereSpec[];

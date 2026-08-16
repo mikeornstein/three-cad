@@ -140,6 +140,31 @@ export class Viewport {
     this.controlsActive = false;
   };
 
+  /**
+   * Disable orbit/pan/zoom for an in-viewport grab.
+   * Damping still runs in `update()` after `enabled = false`, so zero the
+   * leftover rotate/pan deltas and optionally restore a pre-hold pose.
+   */
+  lockOrbit(restore?: { position: Vector3; target: Vector3 }): void {
+    const controls = this.controls;
+    const internal = orbitDamping(controls);
+    controls.enabled = false;
+    internal.state = ORBIT_STATE_NONE;
+    internal._sphericalDelta.set(0, 0, 0);
+    internal._panOffset.set(0, 0, 0);
+    if (restore) {
+      this.camera.position.copy(restore.position);
+      controls.target.copy(restore.target);
+      controls.update();
+    }
+    this.controlsActive = false;
+  }
+
+  /** Re-enable orbit after a grab ends. */
+  unlockOrbit(): void {
+    this.controls.enabled = true;
+  }
+
   getSceneLook(): SceneLook {
     return this.look;
   }
@@ -340,7 +365,7 @@ export class Viewport {
   }
 
   /**
-   * Register a per-frame hook (e.g. cursor-follow animation).
+   * Register a per-frame hook (e.g. grab-drag animation).
    * Returns an unsubscribe function.
    */
   onFrame(cb: (dtMs: number) => void): () => void {
@@ -425,7 +450,7 @@ export class Viewport {
     this.lastFrameTime = now;
     this.controls.update();
     // TAAU may have left a Halton view-offset on the shared camera. Raycasts
-    // (sphere follow) and hold must see the unjittered projection.
+    // (sphere grab) and hold must see the unjittered projection.
     this.camera.clearViewOffset();
     this.camera.updateMatrixWorld();
     const camMoved = this.updateStillFactor(dtMs);
@@ -646,6 +671,25 @@ function disposeObject(object: Object3D): void {
 
 function intensityOf(rgb: readonly [number, number, number]): number {
   return Math.max(rgb[0], rgb[1], rgb[2], 0.01);
+}
+
+/** OrbitControls `state` value for NONE (not in the public typings). */
+const ORBIT_STATE_NONE = -1;
+
+/**
+ * Damping leftovers live on r185 private fields. Keep the cast here so
+ * demo grab code does not poke OrbitControls internals.
+ */
+function orbitDamping(controls: OrbitControls): {
+  state: number;
+  _sphericalDelta: { set(radius: number, phi: number, theta: number): void };
+  _panOffset: Vector3;
+} {
+  return controls as OrbitControls & {
+    state: number;
+    _sphericalDelta: { set(radius: number, phi: number, theta: number): void };
+    _panOffset: Vector3;
+  };
 }
 
 function rgbToHex(rgb: readonly [number, number, number]): number {

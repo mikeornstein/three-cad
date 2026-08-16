@@ -41,7 +41,7 @@ export interface CreateDemoSolidOptions {
   readonly look?: SceneLook;
   /**
    * When true (default), demo-sphere center/radius are live uniforms so the
-   * viewport can drive real-time smoothUnion (cursor follow).
+   * viewport can drive real-time smoothUnion (grab-drag).
    */
   readonly liveSphere?: boolean;
 }
