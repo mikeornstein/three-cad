@@ -13,8 +13,11 @@ export interface DisplayPipeline {
   readonly scenePass: ReturnType<typeof pass>;
   readonly taau: ReturnType<typeof taau>;
   setScale(scale: number): void;
-  /** Drop history so a live-sphere move does not ghost. */
-  resetHistory(): void;
+  /**
+   * When false, present the unjittered scene pass (live-sphere / field deform).
+   * When true, TAAU + Halton view-offset (camera motion of a static field).
+   */
+  setTemporal(enabled: boolean): void;
   render(): void;
   dispose(): void;
 }
@@ -44,6 +47,7 @@ export function createDisplayPipeline(
   pipeline.outputNode = taauNode;
 
   let applied = 1;
+  let temporal = true;
 
   return {
     pipeline,
@@ -55,14 +59,14 @@ export function createDisplayPipeline(
       applied = s;
       scenePass.setResolutionScale(s);
     },
-    resetHistory() {
-      // TAAU reseeds when the history target size changes. No public reset API.
-      const history = (
-        taauNode as unknown as {
-          _historyRenderTarget: { setSize: (w: number, h: number) => void };
-        }
-      )._historyRenderTarget;
-      history.setSize(1, 1);
+    setTemporal(enabled: boolean) {
+      if (enabled === temporal) return;
+      temporal = enabled;
+      // Unjittered pass while the field deforms — TAAU view-offset + stale
+      // history reads as zoom/pop. Re-enable after motion; needsUpdate so
+      // the next render rebuilds the quad without leftover viewOffset hooks.
+      pipeline.outputNode = enabled ? taauNode : scenePass.getTextureNode("output");
+      pipeline.needsUpdate = true;
     },
     render() {
       pipeline.render();
