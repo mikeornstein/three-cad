@@ -993,50 +993,46 @@ export interface RayMarchUniformBag {
 /**
  * Map quality onto sphere-trace / volume / IBL LOD uniforms.
  *
- * - q in [0.12, 1]: interactive look-dev (zoom / FPS LOD). q=1 is full cost.
- * - q in (1, 1.35]: still / inspect boost — more surface steps, tighter hit eps.
- *   Volume path is already maxed at q=1 (shader loop cap 48).
- *
- * Below ~0.45 the shader takes the cheap volume path (no swirl/specks, large steps).
+ * Surface (qS) and volume (qV) are separate: close-up zoom must cheapen
+ * the volume integrator without coarsening the hit / normals / IBL (that
+ * reads as a resolution drop). qV < ~0.45 takes the cheap volume path
+ * (no swirl/specks, large steps).
  */
-export function applyRayMarchQuality(mesh: Mesh, quality: number): void {
+export function applyRayMarchQuality(
+  mesh: Mesh,
+  surfaceQuality: number,
+  volumeQuality: number = surfaceQuality,
+): void {
   if (!isRayMarchMesh(mesh)) return;
   const u = mesh.userData.rayMarchUniforms as RayMarchUniformBag | undefined;
   if (!u) return;
   const base = mesh.userData.rayMarchBase as
     | { maxSteps: number; surfaceEpsMm: number }
     | undefined;
-  const q = Math.min(1.35, Math.max(0.12, quality));
-  const qInt = Math.min(1, q);
-  const stillExtra = Math.max(0, q - 1); // 0..0.35 when inspect-boosted
+  const qS = Math.min(1, Math.max(0.7, surfaceQuality));
+  const qV = Math.min(1, Math.max(0.12, volumeQuality));
   const baseSteps = base?.maxSteps ?? 80;
   const baseEps = base?.surfaceEpsMm ?? 0.06;
 
   if (u.uMaxSteps) {
-    // Keep enough surface steps to hit thin walls / drill edges when close.
-    // Still mode may push toward the sphere-trace hard cap (128).
-    const steps =
-      baseSteps * (0.4 + 0.6 * qInt) + stillExtra * (128 - baseSteps);
-    u.uMaxSteps.value = Math.min(128, Math.round(steps));
+    // Close-up still needs enough steps for thin walls / drill rims.
+    u.uMaxSteps.value = Math.min(128, Math.round(baseSteps * (0.7 + 0.3 * qS)));
   }
   if (u.uSurfaceEps) {
-    // Tighter surface when still (up to ~40% finer than full interactive).
-    u.uSurfaceEps.value = baseEps * (2.8 - 1.8 * qInt) * (1 - stillExtra * 1.15);
+    u.uSurfaceEps.value = baseEps * (1.35 - 0.35 * qS);
   }
   if (u.uVolMaxSteps) {
     // Floor at 8 — cheap path threshold in shader is volMaxSteps < 22.
-    // Cap 48 matches the WGSL volume loop bound.
-    u.uVolMaxSteps.value = Math.min(48, Math.round(8 + 40 * qInt));
+    u.uVolMaxSteps.value = Math.min(48, Math.round(8 + 40 * qV));
   }
   if (u.uVolStepScale) {
-    u.uVolStepScale.value = 3.2 - 2.2 * qInt;
+    u.uVolStepScale.value = 3.2 - 2.2 * qV;
   }
   if (u.uIblQuality) {
-    u.uIblQuality.value = qInt;
+    u.uIblQuality.value = qS;
   }
   if (u.uNormalEps) {
-    // Slightly sharper normals when settled (default base 0.12 mm).
-    u.uNormalEps.value = 0.12 * (1.35 - 0.35 * qInt) * (1 - stillExtra * 0.35);
+    u.uNormalEps.value = 0.12 * (1.2 - 0.2 * qS);
   }
 }
 

@@ -517,12 +517,8 @@ export class Viewport {
   }
 
   /**
-   * Drop fill-rate + per-pixel shader work when zoomed in or when FPS sags.
-   * Glass volume integration is quadratic-ish with on-screen solid area; zoom LOD
-   * must be aggressive or close-up orbit freezes on laptop GPUs.
-   *
-   * Held frames skip this entirely — we never raise fill-rate just because
-   * the camera stopped.
+   * Close-up: cheapen volume only. Surface hit / IBL / drawing-buffer stay
+   * sharp — zoom used to scale one quality number and felt like a res drop.
    */
   private updateZoomLod(): void {
     const dist = this.camera.position.distanceTo(this.controls.target);
@@ -543,31 +539,26 @@ export class Viewport {
     // ~0.74 at default frameObject() (radius fills ~74% of half-FOV). ≫1 when zoomed in.
     const screenFill = this.contentRadiusMm / viewHalfH;
 
-    // Keep full look-dev through the framed view; only pull quality once past it.
-    // Past framed: drop fast into the cheap volume path (q < 0.45 → no swirl/specks).
+    // Volume only — past framed fill, take the cheap integrator (qV < 0.45).
     const framedFill = 0.78;
-    let zoomQ = 1;
+    let volumeQ = 1;
     if (screenFill > framedFill) {
       // fill 0.78→1.0, 1.2→0.55, 1.6→0.25, 2.2→0.12
-      zoomQ = Math.max(0.12, 1 - (screenFill - framedFill) * 0.95);
+      volumeQ = Math.max(0.12, 1 - (screenFill - framedFill) * 0.95);
     }
+    volumeQ = Math.min(1, Math.max(0.12, volumeQ * this.fpsBudgetScale));
+    // Surface stays high so close-up edges do not crawl or soften.
+    const surfaceQ = Math.min(1, Math.max(0.75, this.fpsBudgetScale));
 
-    const quality = Math.min(
-      1,
-      Math.max(0.12, zoomQ * this.fpsBudgetScale),
-    );
-
-    // Always keep shader uniforms in sync (cheap). PR tiers are applied inside
-    // applyPixelRatioForQuality with strong hysteresis.
-    if (Math.abs(quality - this.appliedQuality) >= 0.02) {
-      this.appliedQuality = quality;
+    if (Math.abs(volumeQ - this.appliedQuality) >= 0.02) {
+      this.appliedQuality = volumeQ;
       this.content.traverse((obj) => {
         if (obj instanceof Mesh && isRayMarchMesh(obj)) {
-          applyRayMarchQuality(obj, quality);
+          applyRayMarchQuality(obj, surfaceQ, volumeQ);
         }
       });
     }
-    this.applyPixelRatioForQuality(quality, screenFill);
+    this.applyPixelRatioForQuality(surfaceQ, screenFill);
   }
 
   /**
