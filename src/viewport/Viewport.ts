@@ -5,7 +5,6 @@ import {
   Color,
   DirectionalLight,
   EquirectangularReflectionMapping,
-  GridHelper,
   Group,
   LineSegments,
   Mesh,
@@ -33,6 +32,7 @@ import {
   type DisplayPipeline,
 } from "./createDisplayPipeline";
 import { INTERNAL_SCALE_HIGH, internalScaleFromFps } from "./internalScale";
+import { createStudioGrid } from "./createStudioGrid";
 
 /** World units are millimeters. Right-handed, Z-up. */
 export const MM = 1;
@@ -58,7 +58,7 @@ export class Viewport {
   private disposed = false;
   private initialized = false;
   private look: SceneLook = DEFAULT_LOOK;
-  private grid: GridHelper | null = null;
+  private grid: Mesh | null = null;
   private axes: AxesHelper | null = null;
   private studioEnv: StudioEnvironment | null = null;
 
@@ -391,17 +391,12 @@ export class Viewport {
       this.axes = null;
     }
 
-    const gridSize = 400 * MM;
-    const divisions = 40;
-    const grid = new GridHelper(
-      gridSize,
-      divisions,
-      this.look.gridCenter,
-      this.look.gridLine,
-    );
-    grid.rotation.x = Math.PI / 2;
-    grid.position.z = 0;
-    grid.renderOrder = -20;
+    const grid = createStudioGrid({
+      sizeMm: 400 * MM,
+      cellMm: 10 * MM,
+      lineColor: this.look.gridLine,
+      centerColor: this.look.gridCenter,
+    });
     this.root.add(grid);
     this.grid = grid;
 
