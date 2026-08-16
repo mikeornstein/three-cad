@@ -1,7 +1,7 @@
 import "./styles.css";
 import { demoPartDef } from "./document/demoDocument";
 import { createDemoSolid } from "./demo/createDemoSolid";
-import { SphereCursorFollow } from "./demo/sphereCursorFollow";
+import { SphereGrab } from "./demo/sphereGrab";
 import type { LiveSphereHandle } from "./render/createFieldRayMarchMesh";
 import { DEFAULT_LIBRARY_ENTRY } from "./render/library";
 import { withMobileCaps } from "./render/looks";
@@ -138,7 +138,7 @@ async function main(): Promise<void> {
 
     const liveSphere = solid.userData.liveSphere as LiveSphereHandle | undefined;
     if (liveSphere) {
-      new SphereCursorFollow({
+      new SphereGrab({
         viewport,
         liveSphere,
         canvas,
