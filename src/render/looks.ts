@@ -27,8 +27,8 @@ export interface SceneLook {
   /** Cap device pixel ratio for field shading cost while interacting. */
   readonly maxPixelRatio: number;
   /**
-   * Pixel-ratio cap after the viewport settles (camera idle).
-   * Higher than maxPixelRatio sharpens edges when orbit cost is free.
+   * Unused for fill-rate (hold presents the last frame). Kept equal to
+   * maxPixelRatio so looks stay a single resolution knob.
    */
   readonly stillMaxPixelRatio: number;
   /** Default sphere-trace step budget. */
@@ -62,10 +62,10 @@ export const LOOK_MAT_REF_01: SceneLook = {
   rimColor: [0.12, 0.18, 0.28],
   gridCenter: 0x5a6570,
   gridLine: 0x1e242c,
-  // Cap ≤1 so retina fill-rate does not melt the glass volume path when framed.
-  maxPixelRatio: 1,
-  // Settled view may spend fill-rate for sharper edges (retina / high-DPI).
-  stillMaxPixelRatio: 2,
+  // Hold idles the GPU, so interactive can sit above 1× CSS on retina.
+  // FPS-budgeted TAAU scale is the motion safety valve, not this cap.
+  maxPixelRatio: 1.5,
+  stillMaxPixelRatio: 1.5,
   maxSteps: 80,
   surfaceEpsMm: 0.06,
   envIntensity: 1.0,
@@ -88,8 +88,8 @@ export const LOOK_INSPECT: SceneLook = {
   rimColor: [0.12, 0.14, 0.16],
   gridCenter: 0x5a6570,
   gridLine: 0x2e343a,
-  maxPixelRatio: 1,
-  stillMaxPixelRatio: 1.5,
+  maxPixelRatio: 1.25,
+  stillMaxPixelRatio: 1.25,
   maxSteps: 64,
   surfaceEpsMm: 0.08,
   envIntensity: 0.8,
