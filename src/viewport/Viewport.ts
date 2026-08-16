@@ -1,6 +1,5 @@
 import {
   AmbientLight,
-  AxesHelper,
   Box3,
   Color,
   DirectionalLight,
@@ -32,6 +31,7 @@ import {
   type DisplayPipeline,
 } from "./createDisplayPipeline";
 import { INTERNAL_SCALE_HIGH, internalScaleFromFps } from "./internalScale";
+import { createStudioAxes } from "./createStudioAxes";
 import { createStudioGrid } from "./createStudioGrid";
 
 /** World units are millimeters. Right-handed, Z-up. */
@@ -59,7 +59,7 @@ export class Viewport {
   private initialized = false;
   private look: SceneLook = DEFAULT_LOOK;
   private grid: Mesh | null = null;
-  private axes: AxesHelper | null = null;
+  private axes: Group | null = null;
   private studioEnv: StudioEnvironment | null = null;
 
   /** Bounding radius of current content (mm) — used for zoom LOD. */
@@ -384,10 +384,7 @@ export class Viewport {
     }
     if (this.axes) {
       this.root.remove(this.axes);
-      this.axes.geometry.dispose();
-      const aMat = this.axes.material;
-      if (Array.isArray(aMat)) aMat.forEach((m) => m.dispose());
-      else (aMat as { dispose?: () => void }).dispose?.();
+      disposeObject(this.axes);
       this.axes = null;
     }
 
@@ -400,8 +397,7 @@ export class Viewport {
     this.root.add(grid);
     this.grid = grid;
 
-    const axes = new AxesHelper(80 * MM);
-    axes.renderOrder = -19;
+    const axes = createStudioAxes(80 * MM);
     this.root.add(axes);
     this.axes = axes;
   }
