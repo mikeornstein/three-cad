@@ -433,6 +433,9 @@ export class Viewport {
         : Math.min(now - this.lastFrameTime, 100);
     this.lastFrameTime = now;
     this.controls.update();
+    // TAAU may have left a Halton view-offset on the shared camera. Raycasts
+    // (sphere follow) and hold must see the unjittered projection.
+    this.camera.clearViewOffset();
     this.camera.updateMatrixWorld();
     const camMoved = this.updateStillFactor(dtMs);
     for (const hook of this.frameHooks) {
@@ -447,22 +450,23 @@ export class Viewport {
       this.idleMs < Viewport.STILL_SETTLE_MS;
 
     if (!dirty) {
+      this.camera.clearViewOffset();
       this.enterHold();
       return;
     }
 
     this.forceDirty = false;
     this.holding = false;
-    if (liveMoved) {
-      this.display?.resetHistory();
-    }
     this.updateZoomLod();
-    this.display?.setScale(this.appliedInternalScale);
+    // Field deform ≠ camera motion: TAAU view-offset + history reset reads as zoom.
+    this.display?.setTemporal(!liveMoved);
+    this.display?.setScale(liveMoved ? 1 : this.appliedInternalScale);
     if (this.display) {
       this.display.render();
     } else {
       this.renderer.render(this.scene, this.camera);
     }
+    this.camera.clearViewOffset();
     this.tickFps();
   };
 
