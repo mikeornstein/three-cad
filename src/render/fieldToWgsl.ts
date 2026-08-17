@@ -2,13 +2,14 @@
  * Compile a serializable FieldNode tree into WGSL for GPU sphere tracing.
  *
  * Produces helpers +:
- * - `fn sampleField(p) -> vec2<f32>` — x = signed distance (mm), y = material weight
+ * - `fn sampleField(p, …, hlLeaf) -> vec3<f32>` — x = signed distance (mm),
+ *   y = material weight, z = highlight membership for `hlLeaf` (leaf index or −1)
  * - `fn map(p) -> f32` — convenience wrapper
  * - `fn matWeight(p) -> f32` — convenience wrapper
  *
- * Bound fields after min/max CSG are intentional. Smooth-union blends both
- * distance (soft-min) and material weight with the same h factor so materials
- * stay continuous across the join.
+ * Bound fields after min/max CSG are intentional. Smooth-union blends
+ * distance (soft-min), material weight, and highlight membership with the
+ * same h factor so materials and hover stay continuous across the join.
  */
 
 import type { FieldNode } from "../document/fieldDef";
@@ -69,6 +70,11 @@ export interface FieldWgslCompileResult {
    * `, liveSphereCenter, liveSphereRadius` or `""`.
    */
   readonly liveCallSuffix: string;
+  /**
+   * Stable, sorted leafIds that can be targeted by `hlLeaf`
+   * (index into this list, or −1 for none).
+   */
+  readonly leafIds: readonly string[];
 }
 
 /** Shared SDF primitives used by every compiled map(). */
@@ -91,6 +97,7 @@ fn sdCylinderZ(p: vec3<f32>, r: f32, hz: f32) -> f32 {
 interface EmitPair {
   readonly d: string;
   readonly w: string;
+  readonly h: string;
 }
 
 /**
@@ -109,6 +116,8 @@ export function fieldNodeToWgsl(
     .map((p) => `, ${p.name}: ${p.wgslType}`)
     .join("");
   const liveCallSuffix = liveParams.map((p) => `, ${p.name}`).join("");
+  const leafIds = collectFieldLeafIds(root);
+  const leafIndex = new Map(leafIds.map((id, i) => [id, i]));
 
   let nextId = 0;
   const lines: string[] = [];
@@ -119,10 +128,26 @@ export function fieldNodeToWgsl(
     return w === undefined ? 0 : clamp01(w);
   };
 
+  const hlExpr = (leafId?: string): string => {
+    if (!leafId) return "0.0";
+    const idx = leafIndex.get(leafId);
+    if (idx === undefined) return "0.0";
+    return `select(0.0, 1.0, abs(hlLeaf - ${f(idx)}) < 0.5)`;
+  };
+
+  const finishH = (combined: string, leafId: string | undefined, h: string): void => {
+    if (!leafId) {
+      lines.push(`let ${h} = ${combined};`);
+      return;
+    }
+    lines.push(`let ${h} = max(${combined}, ${hlExpr(leafId)});`);
+  };
+
   const emit = (node: FieldNode, pointExpr: string): EmitPair => {
     const id = nextId++;
     const d = `d${id}`;
     const w = `w${id}`;
+    const h = `hl${id}`;
 
     switch (node.op) {
       case "box": {
@@ -138,7 +163,8 @@ export function fieldNodeToWgsl(
           `let ${d} = sdBox((${pointExpr}) - vec3<f32>(${f(cx)}, ${f(cy)}, ${f(cz)}), vec3<f32>(${f(hx)}, ${f(hy)}, ${f(hz)}));`,
         );
         lines.push(`let ${w} = ${f(weightOf(node.leafId))};`);
-        return { d, w };
+        lines.push(`let ${h} = ${hlExpr(node.leafId)};`);
+        return { d, w, h };
       }
       case "sphere": {
         const centerExpr = liveCenterExpr(node.leafId, node.center, liveCenters);
@@ -147,7 +173,8 @@ export function fieldNodeToWgsl(
           `let ${d} = sdSphere((${pointExpr}) - ${centerExpr}, ${radiusExpr});`,
         );
         lines.push(`let ${w} = ${f(weightOf(node.leafId))};`);
-        return { d, w };
+        lines.push(`let ${h} = ${hlExpr(node.leafId)};`);
+        return { d, w, h };
       }
       case "cylinder": {
         const [c0, c1] = node.centerXy;
@@ -172,7 +199,8 @@ export function fieldNodeToWgsl(
           `let ${d} = sdCylinderZ(${localExpr}, ${f(node.radius)}, ${f(halfLen)});`,
         );
         lines.push(`let ${w} = ${f(weightOf(node.leafId))};`);
-        return { d, w };
+        lines.push(`let ${h} = ${hlExpr(node.leafId)};`);
+        return { d, w, h };
       }
       case "union": {
         const a = emit(node.a, pointExpr);
@@ -181,7 +209,8 @@ export function fieldNodeToWgsl(
         lines.push(
           `let ${w} = select(${b.w}, ${a.w}, ${a.d} <= ${b.d});`,
         );
-        return { d, w };
+        finishH(`select(${b.h}, ${a.h}, ${a.d} <= ${b.d})`, node.leafId, h);
+        return { d, w, h };
       }
       case "intersection": {
         const a = emit(node.a, pointExpr);
@@ -190,14 +219,16 @@ export function fieldNodeToWgsl(
         lines.push(
           `let ${w} = select(${b.w}, ${a.w}, ${a.d} >= ${b.d});`,
         );
-        return { d, w };
+        finishH(`select(${b.h}, ${a.h}, ${a.d} >= ${b.d})`, node.leafId, h);
+        return { d, w, h };
       }
       case "difference": {
         const a = emit(node.a, pointExpr);
         const b = emit(node.b, pointExpr);
         lines.push(`let ${d} = max(${a.d}, -${b.d});`);
         lines.push(`let ${w} = ${a.w};`);
-        return { d, w };
+        finishH(a.h, node.leafId, h);
+        return { d, w, h };
       }
       case "translate": {
         const [tx, ty, tz] = node.offset;
@@ -208,32 +239,35 @@ export function fieldNodeToWgsl(
         const child = emit(node.solid, local);
         lines.push(`let ${d} = ${child.d};`);
         lines.push(`let ${w} = ${child.w};`);
-        return { d, w };
+        lines.push(`let ${h} = ${child.h};`);
+        return { d, w, h };
       }
       case "offset": {
         const inner = emit(node.solid, pointExpr);
         lines.push(`let ${d} = ${inner.d} - ${f(node.delta)};`);
         lines.push(`let ${w} = ${inner.w};`);
-        return { d, w };
+        finishH(inner.h, node.leafId, h);
+        return { d, w, h };
       }
       case "smoothUnion": {
-        // Soft-min: distance and material share the same h (C1-ish continuous).
+        // Soft-min: distance, material, and highlight share the same h.
         const a = emit(node.a, pointExpr);
         const b = emit(node.b, pointExpr);
         const k = Math.max(node.k, 1e-6);
-        const h = `h${id}`;
+        const blend = `h${id}`;
         lines.push(
-          `let ${h} = clamp(0.5 + 0.5 * (${b.d} - ${a.d}) / ${f(k)}, 0.0, 1.0);`,
+          `let ${blend} = clamp(0.5 + 0.5 * (${b.d} - ${a.d}) / ${f(k)}, 0.0, 1.0);`,
         );
         lines.push(
-          `let ${d} = mix(${b.d}, ${a.d}, ${h}) - ${f(k)} * ${h} * (1.0 - ${h});`,
+          `let ${d} = mix(${b.d}, ${a.d}, ${blend}) - ${f(k)} * ${blend} * (1.0 - ${blend});`,
         );
         // Smoothstep h slightly for material so the color ramp reads cleaner
         // without changing the geometry soft-min (geometry stays on raw h).
         const hs = `hs${id}`;
-        lines.push(`let ${hs} = ${h} * ${h} * (3.0 - 2.0 * ${h});`);
+        lines.push(`let ${hs} = ${blend} * ${blend} * (3.0 - 2.0 * ${blend});`);
         lines.push(`let ${w} = mix(${b.w}, ${a.w}, ${hs});`);
-        return { d, w };
+        finishH(`mix(${b.h}, ${a.h}, ${hs})`, node.leafId, h);
+        return { d, w, h };
       }
       default: {
         const _exhaustive: never = node;
@@ -249,17 +283,17 @@ export function fieldNodeToWgsl(
   const mapSource = [
     WGSL_SDF_HELPERS,
     "",
-    `fn sampleField(p: vec3<f32>${liveDeclSuffix}) -> vec2<f32> {`,
+    `fn sampleField(p: vec3<f32>${liveDeclSuffix}, hlLeaf: f32) -> vec3<f32> {`,
     ...body,
-    `  return vec2<f32>(${rootPair.d}, ${rootPair.w});`,
+    `  return vec3<f32>(${rootPair.d}, ${rootPair.w}, ${rootPair.h});`,
     "}",
     "",
     `fn map(p: vec3<f32>${liveDeclSuffix}) -> f32 {`,
-    `  return sampleField(p${liveCallSuffix}).x;`,
+    `  return sampleField(p${liveCallSuffix}, -1.0).x;`,
     "}",
     "",
     `fn matWeight(p: vec3<f32>${liveDeclSuffix}) -> f32 {`,
-    `  return sampleField(p${liveCallSuffix}).y;`,
+    `  return sampleField(p${liveCallSuffix}, -1.0).y;`,
     "}",
   ].join("\n");
 
@@ -270,7 +304,35 @@ export function fieldNodeToWgsl(
     liveParams,
     liveDeclSuffix,
     liveCallSuffix,
+    leafIds,
   };
+}
+
+/** Sorted unique leafIds on the tree (primitives and named CSG nodes). */
+export function collectFieldLeafIds(node: FieldNode): string[] {
+  const ids = new Set<string>();
+  const walk = (n: FieldNode): void => {
+    if ("leafId" in n && typeof n.leafId === "string" && n.leafId.length > 0) {
+      ids.add(n.leafId);
+    }
+    switch (n.op) {
+      case "union":
+      case "intersection":
+      case "difference":
+      case "smoothUnion":
+        walk(n.a);
+        walk(n.b);
+        return;
+      case "translate":
+      case "offset":
+        walk(n.solid);
+        return;
+      default:
+        return;
+    }
+  };
+  walk(node);
+  return [...ids].sort();
 }
 
 function collectLiveParams(

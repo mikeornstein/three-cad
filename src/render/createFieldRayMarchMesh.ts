@@ -37,6 +37,12 @@ import {
 } from "three/tsl";
 import type { FieldNode } from "../document/fieldDef";
 import { boundsOf } from "./fieldBounds";
+import {
+  FIELD_HIGHLIGHT_USER,
+  HIGHLIGHT_AMOUNT,
+  type FieldHighlight,
+  type HighlightLevel,
+} from "./fieldHighlight";
 import { fieldNodeToWgsl } from "./fieldToWgsl";
 import { DEFAULT_LOOK, type SceneLook } from "./looks";
 import {
@@ -280,6 +286,8 @@ export function createFieldRayMarchMesh(
   const uM1Spec = uniform(float(materialSpecularBoost(mat1)));
   const uM1Swirl = uniform(float(materialSwirl(mat1)));
   const uM1Speck = uniform(float(materialSpeckDensity(mat1)));
+  const uHlLeaf = uniform(float(-1));
+  const uHlAmount = uniform(float(0));
 
   // TSL texture node → WGSL texture_2d (textureLoad, no separate sampler needed).
   const envMapNode = texture(envMap);
@@ -320,7 +328,7 @@ fn sphereTrace(
     if (i >= maxS) { break; }
     if (t > tFar) { break; }
     let p = ro + rd * t;
-    let d = sampleField(p${liveCall}).x;
+    let d = sampleField(p${liveCall}, -1.0).x;
     if (d < surfaceEps) {
       return t;
     }
@@ -337,10 +345,10 @@ fn calcNormal(p: vec3<f32>, normalEps: f32${liveDecl}) -> vec3<f32> {
   let k2 = vec3<f32>(-1.0, -1.0, 1.0);
   let k3 = vec3<f32>(1.0, 1.0, 1.0);
   return normalize(
-    k0 * sampleField(p + e * k0${liveCall}).x +
-    k1 * sampleField(p + e * k1${liveCall}).x +
-    k2 * sampleField(p + e * k2${liveCall}).x +
-    k3 * sampleField(p + e * k3${liveCall}).x
+    k0 * sampleField(p + e * k0${liveCall}, -1.0).x +
+    k1 * sampleField(p + e * k1${liveCall}, -1.0).x +
+    k2 * sampleField(p + e * k2${liveCall}, -1.0).x +
+    k3 * sampleField(p + e * k3${liveCall}, -1.0).x
   );
 }
 
@@ -530,6 +538,8 @@ fn shadeField(
   m1Spec: f32,
   m1Swirl: f32,
   m1Speck: f32,
+  hlLeaf: f32,
+  highlightAmount: f32,
   envMap: texture_2d<f32>${liveDecl}
 ) -> vec4<f32> {
   let ro = cameraPos;
@@ -542,15 +552,16 @@ fn shadeField(
 
   let pos = ro + rd * hitT;
   let n = calcNormal(pos, normalEps${liveCall});
-  let s0 = sampleField(pos${liveCall});
+  let s0 = sampleField(pos${liveCall}, hlLeaf);
   let mw = clamp(s0.y, 0.0, 1.0);
+  let wake = clamp(s0.z, 0.0, 1.0) * clamp(highlightAmount, 0.0, 1.0);
 
   let baseColor = mix(m0Color, m1Color, mw);
   let roughness = mix(m0Rough, m1Rough, mw);
   let metalness = mix(m0Metal, m1Metal, mw);
   let transmission = mix(m0Trans, m1Trans, mw);
-  let rimBoost = mix(m0Rim, m1Rim, mw);
-  let specBoost = mix(m0Spec, m1Spec, mw);
+  let rimBoost = mix(m0Rim, m1Rim, mw) * mix(1.0, 2.3, wake);
+  let specBoost = mix(m0Spec, m1Spec, mw) * mix(1.0, 1.5, wake);
 
   let v = -rd;
   let nDotV = max(dot(n, v), 0.0);
@@ -585,17 +596,18 @@ fn shadeField(
   let specPow = mix(120.0, 24.0, roughness);
   let specKey = pow(max(dot(n, hKey), 0.0), specPow) * keyColor;
 
+  let graze = clamp(1.0 - nDotV, 0.0, 1.0);
+  let fresnelRim = pow(graze, 3.0);
+
   if (metalness > 0.7 && transmission < 0.2) {
     let diff = baseColor * (ambient + envDiff * 0.8 + keyColor * ndlKey * 0.35);
     let lit = mix(diff, baseColor * envSpec * 1.2, metalness);
-    return vec4<f32>(tonemap(lit + F * envSpec * specBoost), 1.0);
+    let metalWake = baseColor * fresnelRim * wake * 0.35;
+    return vec4<f32>(tonemap(lit + F * envSpec * specBoost + metalWake), 1.0);
   }
 
   // Clear glass specular (moderate, not milky).
   let specular = F * envSpec * (0.7 * specBoost) + F * specKey * 0.12 * specBoost;
-
-  let graze = clamp(1.0 - nDotV, 0.0, 1.0);
-  let fresnelRim = pow(graze, 3.0);
   let edgeCore = pow(graze, 5.2);
   let rimTint = mix(baseColor * 1.15, vec3<f32>(0.3, 0.75, 1.0), 0.35);
   let rim = rimTint * (fresnelRim * 0.55 + edgeCore * 1.0) * rimBoost;
@@ -617,7 +629,7 @@ fn shadeField(
 
   for (var vi = 0; vi < 48; vi++) {
     if (vi >= maxVol) { break; }
-    let s = sampleField(p${liveCall});
+    let s = sampleField(p${liveCall}, hlLeaf);
     if (s.x > surfaceEps) {
       break;
     }
@@ -688,7 +700,10 @@ fn shadeField(
   let glass = (vec3<f32>(1.0) - F * 0.5) * (Cvol + thru) * mix(0.25, 1.0, transmission);
 
   let specAtten = mix(0.45, 1.0, fresnelRim * 0.4 + 0.4);
-  let emit = specular * specAtten + glass + rim + rimLight;
+  // Material-agnostic wake: lift existing rim/spec and add a base-tinted
+  // Fresnel so metal / opaque leaves read as well as glass.
+  let wakeRim = baseColor * fresnelRim * wake * 0.22;
+  let emit = specular * specAtten + glass + rim + rimLight + wakeRim;
 
   let Tavg = (T.x + T.y + T.z) * (1.0 / 3.0);
   let alpha = clamp(1.0 - Tavg * transmission * 0.8, 0.12, 0.88);
@@ -774,6 +789,8 @@ fn hitDepth(
     m1Spec: uM1Spec,
     m1Swirl: uM1Swirl,
     m1Speck: uM1Speck,
+    hlLeaf: uHlLeaf,
+    highlightAmount: uHlAmount,
     envMap: envMapNode,
     ...liveUniformArgs,
   };
@@ -803,6 +820,12 @@ fn hitDepth(
     mesh.userData.definitionHash = options.definitionHash;
   }
   mesh.userData.lookId = look.id;
+  mesh.userData[FIELD_HIGHLIGHT_USER] = createFieldHighlight(
+    compiled.leafIds,
+    uHlLeaf as { value: number },
+    uHlAmount as { value: number },
+  );
+  mesh.userData.fieldHighlight = mesh.userData[FIELD_HIGHLIGHT_USER];
   mesh.userData.rayMarchBase = {
     maxSteps: baseMaxSteps,
     surfaceEpsMm: baseSurfaceEps,
@@ -972,6 +995,35 @@ function patchLiveSpheres(
       return _e;
     }
   }
+}
+
+function createFieldHighlight(
+  leafIds: readonly string[],
+  uLeaf: { value: number },
+  uAmount: { value: number },
+): FieldHighlight {
+  let target: string | null = null;
+  let amount = 0;
+  return {
+    leafIds,
+    setTarget(leafId) {
+      target = leafId;
+      uLeaf.value = leafId === null ? -1 : leafIds.indexOf(leafId);
+    },
+    getTarget() {
+      return target;
+    },
+    setAmount(next) {
+      amount = Math.min(1, Math.max(0, next));
+      uAmount.value = amount;
+    },
+    getAmount() {
+      return amount;
+    },
+    setLevel(level: HighlightLevel) {
+      this.setAmount(HIGHLIGHT_AMOUNT[level]);
+    },
+  };
 }
 
 export function isRayMarchMesh(mesh: Mesh): boolean {

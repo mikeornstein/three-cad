@@ -9,7 +9,10 @@ describe("fieldNodeToWgsl", () => {
     const result = fieldNodeToWgsl(demoFieldNode(), {
       leafMaterialWeight: { "demo-cube": 0, "demo-sphere": 1 },
     });
-    assert.match(result.mapSource, /fn sampleField\(p: vec3<f32>\) -> vec2<f32>/);
+    assert.match(
+      result.mapSource,
+      /fn sampleField\(p: vec3<f32>, hlLeaf: f32\) -> vec3<f32>/,
+    );
     assert.match(result.mapSource, /fn map\(p: vec3<f32>\) -> f32/);
     assert.match(result.mapSource, /fn matWeight\(p: vec3<f32>\) -> f32/);
     assert.match(result.mapSource, /sdBox/);
@@ -78,7 +81,7 @@ describe("fieldNodeToWgsl", () => {
     });
     assert.match(
       result.mapSource,
-      /fn sampleField\(p: vec3<f32>, liveSphereCenter: vec3<f32>, liveSphereRadius: f32\)/,
+      /fn sampleField\(p: vec3<f32>, liveSphereCenter: vec3<f32>, liveSphereRadius: f32, hlLeaf: f32\)/,
     );
     assert.match(
       result.mapSource,
@@ -95,5 +98,21 @@ describe("fieldNodeToWgsl", () => {
       result.liveDeclSuffix,
       ", liveSphereCenter: vec3<f32>, liveSphereRadius: f32",
     );
+  });
+
+  it("assigns stable leaf indices and mixes a highlight channel", () => {
+    const result = fieldNodeToWgsl(demoFieldNode(), {
+      leafMaterialWeight: { "demo-cube": 0, "demo-sphere": 1 },
+    });
+    assert.ok(result.leafIds.includes("demo-sphere"));
+    assert.ok(result.leafIds.includes("demo-cube"));
+    const sphereIdx = result.leafIds.indexOf("demo-sphere");
+    assert.match(
+      result.mapSource,
+      new RegExp(`abs\\(hlLeaf - ${sphereIdx}\\.0\\) < 0\\.5`),
+    );
+    // Highlight membership is mixed through CSG like material weight.
+    assert.match(result.mapSource, /let hl\d+ = max\(/);
+    assert.match(result.mapSource, /return vec3<f32>\(/);
   });
 });

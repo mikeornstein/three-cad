@@ -5,12 +5,22 @@
 
 export { boundsOf, orderedMax, orderedMin } from "./fieldBounds";
 export {
+  collectFieldLeafIds,
   fieldNodeToWgsl,
   WGSL_SDF_HELPERS,
   type FieldWgslCompileOptions,
   type FieldWgslCompileResult,
   type LiveFieldParam,
 } from "./fieldToWgsl";
+export {
+  FIELD_HIGHLIGHT_USER,
+  HIGHLIGHT_AMOUNT,
+  HIGHLIGHT_EASE_MS,
+  highlightCursor,
+  highlightLevelFor,
+  type FieldHighlight,
+  type HighlightLevel,
+} from "./fieldHighlight";
 export {
   DEMO_LEAF_MATERIAL_WEIGHT,
   MAT_AMBER_RESIN,
