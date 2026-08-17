@@ -115,4 +115,18 @@ describe("fieldNodeToWgsl", () => {
     assert.match(result.mapSource, /let hl\d+ = max\(/);
     assert.match(result.mapSource, /return vec3<f32>\(/);
   });
+
+  it("emits a live offset on a named CSG node and its subtree", () => {
+    const result = fieldNodeToWgsl(demoFieldNode(), {
+      liveOffsets: { "cut-cube": "liveCutCubeOffset" },
+    });
+    assert.match(
+      result.mapSource,
+      /fn sampleField\(p: vec3<f32>, liveCutCubeOffset: vec3<f32>, hlLeaf: f32\)/,
+    );
+    assert.match(result.mapSource, /p_\d+ = \(p\) - liveCutCubeOffset/);
+    assert.equal(result.liveParams.length, 1);
+    assert.equal(result.liveParams[0]?.role, "offset");
+    assert.equal(result.liveCallSuffix, ", liveCutCubeOffset");
+  });
 });

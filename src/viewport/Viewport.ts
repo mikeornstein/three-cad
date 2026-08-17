@@ -19,7 +19,9 @@ import {
   applyRayMarchQuality,
   isRayMarchMesh,
   LIVE_SPHERE_USER,
+  LIVE_TRANSLATE_USER,
   type LiveSphereHandle,
+  type LiveTranslateHandle,
 } from "../render/createFieldRayMarchMesh";
 import {
   FIELD_HIGHLIGHT_USER,
@@ -528,6 +530,15 @@ export class Viewport {
         for (const h of handles) {
           const c = h.getCenter();
           fp += `${h.leafId}:${c.x.toFixed(3)},${c.y.toFixed(3)},${c.z.toFixed(3)},${h.getRadius().toFixed(3)};`;
+        }
+      }
+      const xforms = obj.userData[LIVE_TRANSLATE_USER] as
+        | LiveTranslateHandle[]
+        | undefined;
+      if (xforms) {
+        for (const h of xforms) {
+          const c = h.getCenter();
+          fp += `xf:${h.leafId}:${c.x.toFixed(3)},${c.y.toFixed(3)},${c.z.toFixed(3)};`;
         }
       }
       const hl = obj.userData[FIELD_HIGHLIGHT_USER] as FieldHighlight | undefined;

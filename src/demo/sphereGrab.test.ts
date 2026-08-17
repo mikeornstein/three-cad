@@ -14,7 +14,7 @@ import {
 
 describe("reduceGrabPhase", () => {
   it("starts pending on sphere hit from idle", () => {
-    assert.equal(reduceGrabPhase("idle", { type: "down-on-sphere" }), "pending");
+    assert.equal(reduceGrabPhase("idle", { type: "down-on-body" }), "pending");
   });
 
   it("cancels pending when movement exceeds slop", () => {
@@ -50,7 +50,7 @@ describe("reduceGrabPhase", () => {
 
   it("does not start a second pending while grabbing", () => {
     const phase: GrabPhase = "grabbing";
-    assert.equal(reduceGrabPhase(phase, { type: "down-on-sphere" }), "grabbing");
+    assert.equal(reduceGrabPhase(phase, { type: "down-on-body" }), "grabbing");
   });
 });
 

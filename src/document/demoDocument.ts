@@ -22,7 +22,17 @@ import {
   type FieldNode,
 } from "./fieldDef";
 
-const CUBE_MM = 100;
+export const DEMO_CUBE_MM = 100;
+const CUBE_MM = DEMO_CUBE_MM;
+/** Rest AABB of the demo cube (mm). */
+export const DEMO_CUBE_MIN_MM = [0, 0, 0] as const;
+export const DEMO_CUBE_MAX_MM = [CUBE_MM, CUBE_MM, CUBE_MM] as const;
+/** Cube centroid — grab pivot and drill axes (mm). */
+export const DEMO_CUBE_CENTER_MM = [
+  CUBE_MM * 0.5,
+  CUBE_MM * 0.5,
+  CUBE_MM * 0.5,
+] as const;
 /** Demo sphere radius (mm). Exported for live grab-drag. */
 export const DEMO_SPHERE_RADIUS_MM = 50;
 const SPHERE_RADIUS_MM = DEMO_SPHERE_RADIUS_MM;

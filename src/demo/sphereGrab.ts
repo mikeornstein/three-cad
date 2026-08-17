@@ -23,8 +23,16 @@ import {
   type HighlightLevel,
 } from "../render/fieldHighlight";
 import type { LiveSphereHandle } from "../render/createFieldRayMarchMesh";
-import { LiveSpherePicker, type BodyPicker } from "../viewport/pickBody";
+import type { LiveTranslateHandle } from "../render/createFieldRayMarchMesh";
+import { ClosestBodyPicker, type BodyPicker } from "../viewport/pickBody";
 import type { Viewport } from "../viewport/Viewport";
+
+export type LiveGrabHandle = LiveSphereHandle | LiveTranslateHandle;
+
+export interface GrabBody {
+  readonly handle: LiveGrabHandle;
+  readonly picker: BodyPicker;
+}
 
 /** Same beat as the hover ease — grab commits as the wake finishes. */
 export const HOLD_MS = HIGHLIGHT_EASE_MS;
@@ -36,18 +44,16 @@ const WORKSPACE_PAD_MM = 220;
 export type GrabPhase = "idle" | "pending" | "grabbing";
 
 export type GrabEvent =
-  | { type: "down-on-sphere" }
+  | { type: "down-on-body" }
   | { type: "move"; movedPx: number; slopPx: number }
   | { type: "hold" }
   | { type: "up" };
 
 export interface SphereGrabOptions {
   readonly viewport: Viewport;
-  readonly liveSphere: LiveSphereHandle;
   readonly highlight: FieldHighlight;
   readonly canvas: HTMLCanvasElement;
-  /** Defaults to an analytic picker on `liveSphere`. */
-  readonly picker?: BodyPicker;
+  readonly bodies: readonly GrabBody[];
   readonly log?: (msg: string) => void;
 }
 
@@ -57,7 +63,7 @@ export function hitPadMm(coarse: boolean): number {
 
 export function reduceGrabPhase(phase: GrabPhase, event: GrabEvent): GrabPhase {
   switch (event.type) {
-    case "down-on-sphere":
+    case "down-on-body":
       return phase === "idle" ? "pending" : phase;
     case "move":
       if (phase === "pending" && event.movedPx > event.slopPx) return "idle";
@@ -94,11 +100,12 @@ export function grabCenterFromHit(
 
 export class SphereGrab {
   private readonly viewport: Viewport;
-  private readonly live: LiveSphereHandle;
+  private readonly byLeaf: ReadonlyMap<string, LiveGrabHandle>;
   private readonly highlight: FieldHighlight;
   private readonly picker: BodyPicker;
   private readonly canvas: HTMLCanvasElement;
   private readonly log?: (msg: string) => void;
+  private active: LiveGrabHandle | null = null;
 
   private readonly raycaster = new Raycaster();
   private readonly ndc = new Vector2();
@@ -128,27 +135,11 @@ export class SphereGrab {
 
   constructor(options: SphereGrabOptions) {
     this.viewport = options.viewport;
-    this.live = options.liveSphere;
+    this.byLeaf = new Map(options.bodies.map((b) => [b.handle.leafId, b.handle]));
     this.highlight = options.highlight;
-    this.picker =
-      options.picker ??
-      new LiveSpherePicker(options.liveSphere, () =>
-        hitPadMm(isCoarseViewport()),
-      );
+    this.picker = new ClosestBodyPicker(options.bodies.map((b) => b.picker));
     this.canvas = options.canvas;
     this.log = options.log;
-
-    const rest = this.live.restCenter;
-    this.workMin.set(
-      rest.x - WORKSPACE_PAD_MM,
-      rest.y - WORKSPACE_PAD_MM,
-      rest.z - WORKSPACE_PAD_MM,
-    );
-    this.workMax.set(
-      rest.x + WORKSPACE_PAD_MM,
-      rest.y + WORKSPACE_PAD_MM,
-      rest.z + WORKSPACE_PAD_MM,
-    );
 
     this.canvas.addEventListener("pointerdown", this.onPointerDown);
     this.canvas.addEventListener("pointermove", this.onPointerMove);
@@ -160,7 +151,7 @@ export class SphereGrab {
     this.unsubFrame = this.viewport.onFrame(this.tick);
     this.setPhase("idle");
     this.writeCenterAttr();
-    this.log?.("long-press the sphere to drag");
+    this.log?.("long-press a body to drag");
   }
 
   get grabbing(): boolean {
@@ -200,8 +191,9 @@ export class SphereGrab {
       return;
     }
     this.hoverLeafId = hitLeaf;
+    this.active = this.byLeaf.get(hitLeaf) ?? null;
 
-    this.setPhase(reduceGrabPhase(this.phase, { type: "down-on-sphere" }));
+    this.setPhase(reduceGrabPhase(this.phase, { type: "down-on-body" }));
     this.pointerId = e.pointerId;
     this.downClient.set(e.clientX, e.clientY);
     this.camSnapPos.copy(this.viewport.camera.position);
@@ -228,6 +220,7 @@ export class SphereGrab {
         this.clearHoldTimer();
         this.setPhase("idle");
         this.pointerId = -1;
+        this.active = null;
         return;
       }
     }
@@ -247,7 +240,8 @@ export class SphereGrab {
       this.viewport.unlockOrbit();
       this.releaseCapture();
       this.applyCursor();
-      this.log?.("sphere drop");
+      this.log?.(`${this.active?.leafId ?? "body"} drop`);
+      this.active = null;
     }
     this.pointerId = -1;
     this.pointerButtons = e.buttons;
@@ -285,8 +279,15 @@ export class SphereGrab {
     }
     this.applyCursor();
 
+    const live = this.active;
+    if (!live) {
+      this.setPhase("idle");
+      return;
+    }
+    this.bindWorkspace(live.restCenter);
+
     const camera = this.viewport.camera as PerspectiveCamera;
-    this.live.getCenter(this.hit);
+    live.getCenter(this.hit);
     camera.getWorldDirection(this.camDir);
     this.plane.setFromNormalAndCoplanarPoint(this.camDir, this.hit);
     this.ndcFromPointer();
@@ -298,8 +299,10 @@ export class SphereGrab {
       this.grabOffset.set(0, 0, 0);
     }
 
-    this.popAnim = { t0: performance.now(), duration: POP_MS };
-    this.log?.("sphere grab");
+    if (isSphereHandle(live)) {
+      this.popAnim = { t0: performance.now(), duration: POP_MS };
+    }
+    this.log?.(`${live.leafId} grab`);
   };
 
   private applyGrab(): void {
@@ -315,7 +318,7 @@ export class SphereGrab {
       this.workMax,
       this.hit,
     );
-    this.live.setCenter(this.hit);
+    this.active?.setCenter(this.hit);
     this.writeCenterAttr();
   }
 
@@ -324,12 +327,17 @@ export class SphereGrab {
     this.syncHover();
     this.syncHighlight(dtMs);
     if (!this.popAnim) return;
+    const live = this.active;
+    if (!live || !isSphereHandle(live)) {
+      this.popAnim = null;
+      return;
+    }
     const now = performance.now();
     const u = clamp01((now - this.popAnim.t0) / this.popAnim.duration);
-    this.live.setRadius(this.live.restRadius * popScale(u));
+    live.setRadius(live.restRadius * popScale(u));
     if (u >= 1) {
       this.popAnim = null;
-      this.live.setRadius(this.live.restRadius);
+      live.setRadius(live.restRadius);
     }
   };
 
@@ -341,7 +349,7 @@ export class SphereGrab {
 
   private syncHover(): void {
     if (this.phase !== "idle") {
-      this.hoverLeafId = this.live.leafId;
+      this.hoverLeafId = this.active?.leafId ?? this.hoverLeafId;
       return;
     }
     if (!this.hasPointer || this.pointerButtons !== 0) {
@@ -362,7 +370,9 @@ export class SphereGrab {
     this.highlightLevel = level;
     const targetAmount = HIGHLIGHT_AMOUNT[level];
     const leaf =
-      this.phase !== "idle" ? this.live.leafId : this.hoverLeafId;
+      this.phase !== "idle"
+        ? (this.active?.leafId ?? this.hoverLeafId)
+        : this.hoverLeafId;
     if (leaf) {
       this.highlight.setTarget(leaf);
     }
@@ -388,9 +398,30 @@ export class SphereGrab {
     );
   }
 
+  private bindWorkspace(rest: Vector3): void {
+    this.workMin.set(
+      rest.x - WORKSPACE_PAD_MM,
+      rest.y - WORKSPACE_PAD_MM,
+      rest.z - WORKSPACE_PAD_MM,
+    );
+    this.workMax.set(
+      rest.x + WORKSPACE_PAD_MM,
+      rest.y + WORKSPACE_PAD_MM,
+      rest.z + WORKSPACE_PAD_MM,
+    );
+  }
+
   private writeCenterAttr(): void {
-    const c = this.live.getCenter();
-    this.canvas.dataset.sphereCenter = `${c.x.toFixed(2)},${c.y.toFixed(2)},${c.z.toFixed(2)}`;
+    for (const h of this.byLeaf.values()) {
+      const c = h.getCenter();
+      const key =
+        h.leafId === "demo-sphere"
+          ? "sphereCenter"
+          : h.leafId === "cut-cube"
+            ? "cubeCenter"
+            : `${h.leafId}Center`;
+      this.canvas.dataset[key] = `${c.x.toFixed(2)},${c.y.toFixed(2)},${c.z.toFixed(2)}`;
+    }
   }
 
   private syncPointer(e: PointerEvent): void {
@@ -423,7 +454,11 @@ export class SphereGrab {
   }
 }
 
-function isCoarseViewport(): boolean {
+function isSphereHandle(h: LiveGrabHandle): h is LiveSphereHandle {
+  return "setRadius" in h && "restRadius" in h;
+}
+
+export function isCoarseViewport(): boolean {
   return (
     typeof window !== "undefined" &&
     typeof window.matchMedia === "function" &&
