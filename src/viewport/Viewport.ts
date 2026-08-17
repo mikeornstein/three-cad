@@ -22,6 +22,10 @@ import {
   type LiveSphereHandle,
 } from "../render/createFieldRayMarchMesh";
 import {
+  FIELD_HIGHLIGHT_USER,
+  type FieldHighlight,
+} from "../render/fieldHighlight";
+import {
   DEFAULT_LOOK,
   type SceneLook,
 } from "../render/looks";
@@ -512,7 +516,7 @@ export class Viewport {
     return false;
   }
 
-  /** Snapshot live sphere uniforms; true when center/radius changed this frame. */
+  /** Snapshot live sphere + highlight uniforms; true when display state changed. */
   private liveSphereChanged(): boolean {
     let fp = "";
     this.content.traverse((obj) => {
@@ -520,10 +524,15 @@ export class Viewport {
       const handles = obj.userData[LIVE_SPHERE_USER] as
         | LiveSphereHandle[]
         | undefined;
-      if (!handles) return;
-      for (const h of handles) {
-        const c = h.getCenter();
-        fp += `${h.leafId}:${c.x.toFixed(3)},${c.y.toFixed(3)},${c.z.toFixed(3)},${h.getRadius().toFixed(3)};`;
+      if (handles) {
+        for (const h of handles) {
+          const c = h.getCenter();
+          fp += `${h.leafId}:${c.x.toFixed(3)},${c.y.toFixed(3)},${c.z.toFixed(3)},${h.getRadius().toFixed(3)};`;
+        }
+      }
+      const hl = obj.userData[FIELD_HIGHLIGHT_USER] as FieldHighlight | undefined;
+      if (hl) {
+        fp += `hl:${hl.getTarget() ?? ""}:${hl.getAmount().toFixed(3)};`;
       }
     });
     if (fp === this.lastLiveFingerprint) return false;

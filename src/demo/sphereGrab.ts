@@ -13,10 +13,21 @@ import {
   type Camera,
   type PerspectiveCamera,
 } from "three";
+import {
+  HIGHLIGHT_AMOUNT,
+  HIGHLIGHT_EASE_MS,
+  easeToward,
+  highlightCursor,
+  highlightLevelFor,
+  type FieldHighlight,
+  type HighlightLevel,
+} from "../render/fieldHighlight";
 import type { LiveSphereHandle } from "../render/createFieldRayMarchMesh";
+import { LiveSpherePicker, type BodyPicker } from "../viewport/pickBody";
 import type { Viewport } from "../viewport/Viewport";
 
-export const HOLD_MS = 350;
+/** Same beat as the hover ease — grab commits as the wake finishes. */
+export const HOLD_MS = HIGHLIGHT_EASE_MS;
 export const SLOP_PX = 8;
 const POP_MS = 220;
 /** Soft workspace half-extent past rest center (mm). */
@@ -33,7 +44,10 @@ export type GrabEvent =
 export interface SphereGrabOptions {
   readonly viewport: Viewport;
   readonly liveSphere: LiveSphereHandle;
+  readonly highlight: FieldHighlight;
   readonly canvas: HTMLCanvasElement;
+  /** Defaults to an analytic picker on `liveSphere`. */
+  readonly picker?: BodyPicker;
   readonly log?: (msg: string) => void;
 }
 
@@ -81,12 +95,13 @@ export function grabCenterFromHit(
 export class SphereGrab {
   private readonly viewport: Viewport;
   private readonly live: LiveSphereHandle;
+  private readonly highlight: FieldHighlight;
+  private readonly picker: BodyPicker;
   private readonly canvas: HTMLCanvasElement;
   private readonly log?: (msg: string) => void;
 
   private readonly raycaster = new Raycaster();
   private readonly ndc = new Vector2();
-  private readonly pickSphere = new Sphere();
   private readonly plane = new Plane();
   private readonly hit = new Vector3();
   private readonly camDir = new Vector3();
@@ -103,12 +118,23 @@ export class SphereGrab {
   private holdTimer = 0;
   private disposed = false;
   private popAnim: { t0: number; duration: number } | null = null;
+  private pointerButtons = 0;
+  private hasPointer = false;
+  private hoverLeafId: string | null = null;
+  private highlightAmount = 0;
+  private highlightLevel: HighlightLevel = "rest";
 
   private readonly unsubFrame: () => void;
 
   constructor(options: SphereGrabOptions) {
     this.viewport = options.viewport;
     this.live = options.liveSphere;
+    this.highlight = options.highlight;
+    this.picker =
+      options.picker ??
+      new LiveSpherePicker(options.liveSphere, () =>
+        hitPadMm(isCoarseViewport()),
+      );
     this.canvas = options.canvas;
     this.log = options.log;
 
@@ -128,6 +154,7 @@ export class SphereGrab {
     this.canvas.addEventListener("pointermove", this.onPointerMove);
     this.canvas.addEventListener("pointerup", this.onPointerUp);
     this.canvas.addEventListener("pointercancel", this.onPointerUp);
+    this.canvas.addEventListener("pointerleave", this.onPointerLeave);
     this.canvas.addEventListener("contextmenu", this.onContextMenu);
 
     this.unsubFrame = this.viewport.onFrame(this.tick);
@@ -153,31 +180,26 @@ export class SphereGrab {
     this.canvas.removeEventListener("pointermove", this.onPointerMove);
     this.canvas.removeEventListener("pointerup", this.onPointerUp);
     this.canvas.removeEventListener("pointercancel", this.onPointerUp);
+    this.canvas.removeEventListener("pointerleave", this.onPointerLeave);
     this.canvas.removeEventListener("contextmenu", this.onContextMenu);
     this.releaseCapture();
     this.canvas.style.cursor = "";
+    this.highlight.setAmount(0);
+    this.highlight.setTarget(null);
   }
 
   private readonly onPointerDown = (e: PointerEvent): void => {
     if (this.disposed || e.button !== 0) return;
     if (this.phase !== "idle") return;
     this.syncPointer(e);
-    const pad = hitPadMm(isCoarsePointer(e));
-    this.live.getCenter(this.hit);
-    this.pickSphere.center.copy(this.hit);
-    this.pickSphere.radius = this.live.getRadius() + pad;
+    this.pointerButtons = e.buttons;
     this.ndcFromPointer();
     this.raycaster.setFromCamera(this.ndc, this.viewport.camera as Camera);
-    if (
-      !rayHitsSphere(
-        this.raycaster.ray,
-        this.pickSphere.center,
-        this.pickSphere.radius,
-        this.hit,
-      )
-    ) {
+    const hitLeaf = this.picker.pick(this.raycaster.ray, this.hit);
+    if (hitLeaf === null) {
       return;
     }
+    this.hoverLeafId = hitLeaf;
 
     this.setPhase(reduceGrabPhase(this.phase, { type: "down-on-sphere" }));
     this.pointerId = e.pointerId;
@@ -191,6 +213,7 @@ export class SphereGrab {
   private readonly onPointerMove = (e: PointerEvent): void => {
     if (this.disposed) return;
     this.syncPointer(e);
+    this.pointerButtons = e.buttons;
     if (this.phase === "pending" && e.pointerId === this.pointerId) {
       const moved = Math.hypot(
         e.clientX - this.downClient.x,
@@ -223,10 +246,19 @@ export class SphereGrab {
     if (wasGrab) {
       this.viewport.unlockOrbit();
       this.releaseCapture();
-      this.canvas.style.cursor = "";
+      this.applyCursor();
       this.log?.("sphere drop");
     }
     this.pointerId = -1;
+    this.pointerButtons = e.buttons;
+  };
+
+  private readonly onPointerLeave = (): void => {
+    this.hasPointer = false;
+    this.pointerButtons = 0;
+    if (this.phase === "idle") {
+      this.hoverLeafId = null;
+    }
   };
 
   private readonly onContextMenu = (e: MouseEvent): void => {
@@ -251,7 +283,7 @@ export class SphereGrab {
     } catch {
       // Capture is optional; OrbitControls may already hold it.
     }
-    this.canvas.style.cursor = "grabbing";
+    this.applyCursor();
 
     const camera = this.viewport.camera as PerspectiveCamera;
     this.live.getCenter(this.hit);
@@ -287,8 +319,11 @@ export class SphereGrab {
     this.writeCenterAttr();
   }
 
-  private readonly tick = (_dtMs: number): void => {
-    if (this.disposed || !this.popAnim) return;
+  private readonly tick = (dtMs: number): void => {
+    if (this.disposed) return;
+    this.syncHover();
+    this.syncHighlight(dtMs);
+    if (!this.popAnim) return;
     const now = performance.now();
     const u = clamp01((now - this.popAnim.t0) / this.popAnim.duration);
     this.live.setRadius(this.live.restRadius * popScale(u));
@@ -301,6 +336,56 @@ export class SphereGrab {
   private setPhase(next: GrabPhase): void {
     this.phase = next;
     this.canvas.dataset.sphereGrab = next;
+    this.applyCursor();
+  }
+
+  private syncHover(): void {
+    if (this.phase !== "idle") {
+      this.hoverLeafId = this.live.leafId;
+      return;
+    }
+    if (!this.hasPointer || this.pointerButtons !== 0) {
+      this.hoverLeafId = null;
+      return;
+    }
+    this.ndcFromPointer();
+    this.raycaster.setFromCamera(this.ndc, this.viewport.camera as Camera);
+    this.hoverLeafId = this.picker.pick(this.raycaster.ray);
+  }
+
+  private syncHighlight(dtMs: number): void {
+    const level = highlightLevelFor({
+      hoverLeafId: this.hoverLeafId,
+      phase: this.phase,
+      pointerButtons: this.pointerButtons,
+    });
+    this.highlightLevel = level;
+    const targetAmount = HIGHLIGHT_AMOUNT[level];
+    const leaf =
+      this.phase !== "idle" ? this.live.leafId : this.hoverLeafId;
+    if (leaf) {
+      this.highlight.setTarget(leaf);
+    }
+    this.highlightAmount = easeToward(
+      this.highlightAmount,
+      targetAmount,
+      dtMs,
+      HIGHLIGHT_EASE_MS,
+    );
+    this.highlight.setAmount(this.highlightAmount);
+    if (this.highlightAmount <= 0 && this.phase === "idle") {
+      this.highlight.setTarget(null);
+    }
+    this.canvas.dataset.highlightLevel = level;
+    this.canvas.dataset.highlightAmount = this.highlightAmount.toFixed(2);
+    this.applyCursor();
+  }
+
+  private applyCursor(): void {
+    this.canvas.style.cursor = highlightCursor(
+      this.highlightLevel,
+      this.phase,
+    );
   }
 
   private writeCenterAttr(): void {
@@ -313,6 +398,7 @@ export class SphereGrab {
     if (rect.width <= 0 || rect.height <= 0) return;
     this.pointer.x = (e.clientX - rect.left) / rect.width;
     this.pointer.y = (e.clientY - rect.top) / rect.height;
+    this.hasPointer = true;
   }
 
   private ndcFromPointer(): void {
@@ -337,8 +423,7 @@ export class SphereGrab {
   }
 }
 
-function isCoarsePointer(e: PointerEvent): boolean {
-  if (e.pointerType === "touch") return true;
+function isCoarseViewport(): boolean {
   return (
     typeof window !== "undefined" &&
     typeof window.matchMedia === "function" &&

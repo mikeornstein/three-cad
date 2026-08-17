@@ -3,6 +3,7 @@ import { demoPartDef } from "./document/demoDocument";
 import { createDemoSolid } from "./demo/createDemoSolid";
 import { SphereGrab } from "./demo/sphereGrab";
 import type { LiveSphereHandle } from "./render/createFieldRayMarchMesh";
+import type { FieldHighlight } from "./render/fieldHighlight";
 import { DEFAULT_LIBRARY_ENTRY } from "./render/library";
 import { withMobileCaps } from "./render/looks";
 import { loadStudioEnvironment } from "./render/studioEnv";
@@ -137,10 +138,14 @@ async function main(): Promise<void> {
     }
 
     const liveSphere = solid.userData.liveSphere as LiveSphereHandle | undefined;
-    if (liveSphere) {
+    const highlight = solid.userData.fieldHighlight as
+      | FieldHighlight
+      | undefined;
+    if (liveSphere && highlight) {
       new SphereGrab({
         viewport,
         liveSphere,
+        highlight,
         canvas,
         log: (msg) => screenConsole?.log(msg),
       });
