@@ -77,6 +77,22 @@ export interface LiveSphereHandle {
   getRadius(): number;
 }
 
+/** Rigid live offset for any named node (cube + drills, instances, …). */
+export interface LiveTranslateSpec {
+  readonly leafId: string;
+  /** Rest centroid used as getCenter / setCenter origin (mm). */
+  readonly restCenter: readonly [number, number, number] | Vector3;
+}
+
+export interface LiveTranslateHandle {
+  readonly leafId: string;
+  readonly restCenter: Vector3;
+  setOffset(v: Vector3 | readonly [number, number, number]): void;
+  getOffset(out?: Vector3): Vector3;
+  setCenter(v: Vector3 | readonly [number, number, number]): void;
+  getCenter(out?: Vector3): Vector3;
+}
+
 export interface FieldRayMarchOptions {
   readonly name?: string;
   /** @deprecated Prefer material slots; kept as material-0 tint override. */
@@ -101,6 +117,11 @@ export interface FieldRayMarchOptions {
    * Smooth-union and materials re-evaluate every frame without recompiling WGSL.
    */
   readonly liveSpheres?: readonly LiveSphereSpec[];
+  /**
+   * Named nodes whose whole subtree is translated by a live vec3
+   * (grab-drag a body without recompiling WGSL).
+   */
+  readonly liveTranslates?: readonly LiveTranslateSpec[];
 }
 
 export interface FieldRayMarchMesh extends Mesh {
@@ -108,6 +129,7 @@ export interface FieldRayMarchMesh extends Mesh {
 }
 
 export const LIVE_SPHERE_USER = "threeCadLiveSpheres";
+export const LIVE_TRANSLATE_USER = "threeCadLiveTranslates";
 
 /**
  * Small black float texture so the shader always has a valid env binding.
@@ -180,11 +202,28 @@ export function createFieldRayMarchMesh(
     });
   });
 
+  const liveTranslates = options.liveTranslates ?? [];
+  const liveOffsetNames: Record<string, string> = {};
+  const liveOffsetInitial = new Map<
+    string,
+    { restCenter: Vector3; param: string }
+  >();
+  liveTranslates.forEach((spec, i) => {
+    const suffix = liveTranslates.length === 1 ? "" : String(i);
+    const param = `liveOffset${suffix}`;
+    liveOffsetNames[spec.leafId] = param;
+    liveOffsetInitial.set(spec.leafId, {
+      restCenter: toVec3(spec.restCenter),
+      param,
+    });
+  });
+
   const compiled = fieldNodeToWgsl(fieldNode, {
     leafMaterialWeight: leafWeights,
     liveSphereCenters:
       liveSpheres.length > 0 ? liveSphereCenters : undefined,
     liveSphereRadii: liveSpheres.length > 0 ? liveSphereRadii : undefined,
+    liveOffsets: liveTranslates.length > 0 ? liveOffsetNames : undefined,
   });
   const liveDecl = compiled.liveDeclSuffix;
   const liveCall = compiled.liveCallSuffix;
@@ -199,8 +238,9 @@ export function createFieldRayMarchMesh(
   const cy = (min[1] + max[1]) * 0.5;
   const cz = (min[2] + max[2]) * 0.5;
 
-  // Unit box + scale/position when live spheres can leave the rest AABB.
-  const useDynamicBounds = liveSpheres.length > 0;
+  // Unit box + scale/position when live leaves can leave the rest AABB.
+  const useDynamicBounds =
+    liveSpheres.length > 0 || liveTranslates.length > 0;
   const geometry = useDynamicBounds
     ? new BoxGeometry(1, 1, 1)
     : new BoxGeometry(sx, sy, sz);
@@ -222,6 +262,7 @@ export function createFieldRayMarchMesh(
     { value: Vector3 }
   >();
   const liveRadiusUniforms = new Map<string, { value: number }>();
+  const liveOffsetUniforms = new Map<string, { value: Vector3 }>();
   for (const [, init] of liveInitial) {
     const uC = uniform(init.center.clone());
     const uR = uniform(float(init.radius));
@@ -229,6 +270,11 @@ export function createFieldRayMarchMesh(
     liveUniformArgs[init.radiusParam] = uR;
     liveCenterUniforms.set(init.centerParam, uC as { value: Vector3 });
     liveRadiusUniforms.set(init.radiusParam, uR as { value: number });
+  }
+  for (const [, init] of liveOffsetInitial) {
+    const uO = uniform(new Vector3(0, 0, 0));
+    liveUniformArgs[init.param] = uO;
+    liveOffsetUniforms.set(init.param, uO as { value: Vector3 });
   }
   const uAmbient = uniform(colorFromRgb(look.ambient));
   const uKeyDir = uniform(vecFromTuple(look.keyDir).normalize());
@@ -873,6 +919,8 @@ fn hitDepth(
             liveInitial,
             liveCenterUniforms,
             liveRadiusUniforms,
+            liveOffsetInitial,
+            liveOffsetUniforms,
             uBoundsMin,
             uBoundsMax,
             pad,
@@ -886,6 +934,8 @@ fn hitDepth(
             liveInitial,
             liveCenterUniforms,
             liveRadiusUniforms,
+            liveOffsetInitial,
+            liveOffsetUniforms,
             uBoundsMin,
             uBoundsMax,
             pad,
@@ -903,6 +953,60 @@ fn hitDepth(
     mesh.userData[LIVE_SPHERE_USER] = handles;
     // Convenience: primary (first) live sphere.
     mesh.userData.liveSphere = handles[0];
+
+    const translateHandles: LiveTranslateHandle[] = [];
+    for (const [leafId, init] of liveOffsetInitial) {
+      const offsetU = liveOffsetUniforms.get(init.param)!;
+      const restCenter = init.restCenter.clone();
+      const handle: LiveTranslateHandle = {
+        leafId,
+        restCenter,
+        setOffset(v) {
+          offsetU.value.copy(toVec3(v));
+          refreshLiveBounds(
+            mesh,
+            fieldNode,
+            liveInitial,
+            liveCenterUniforms,
+            liveRadiusUniforms,
+            liveOffsetInitial,
+            liveOffsetUniforms,
+            uBoundsMin,
+            uBoundsMax,
+            pad,
+          );
+        },
+        getOffset(out = new Vector3()) {
+          return out.copy(offsetU.value);
+        },
+        setCenter(v) {
+          const c = toVec3(v);
+          offsetU.value.set(
+            c.x - restCenter.x,
+            c.y - restCenter.y,
+            c.z - restCenter.z,
+          );
+          refreshLiveBounds(
+            mesh,
+            fieldNode,
+            liveInitial,
+            liveCenterUniforms,
+            liveRadiusUniforms,
+            liveOffsetInitial,
+            liveOffsetUniforms,
+            uBoundsMin,
+            uBoundsMax,
+            pad,
+          );
+        },
+        getCenter(out = new Vector3()) {
+          return out.copy(restCenter).add(offsetU.value);
+        },
+      };
+      translateHandles.push(handle);
+    }
+    mesh.userData[LIVE_TRANSLATE_USER] = translateHandles;
+    mesh.userData.liveTranslate = translateHandles[0];
   }
 
   mesh.frustumCulled = true;
@@ -942,11 +1046,13 @@ function refreshLiveBounds(
   >,
   liveCenterUniforms: Map<string, { value: Vector3 }>,
   liveRadiusUniforms: Map<string, { value: number }>,
+  liveOffsetInitial: Map<string, { restCenter: Vector3; param: string }>,
+  liveOffsetUniforms: Map<string, { value: Vector3 }>,
   uBoundsMin: { value: Vector3 },
   uBoundsMax: { value: Vector3 },
   pad: number,
 ): void {
-  const patched = patchLiveSpheres(fieldNode, (leafId, node) => {
+  let patched = patchLiveSpheres(fieldNode, (leafId, node) => {
     const init = liveInitial.get(leafId);
     if (!init) return node;
     const cU = liveCenterUniforms.get(init.centerParam);
@@ -959,6 +1065,12 @@ function refreshLiveBounds(
       radius: r,
     };
   });
+  const offsets = new Map<string, Vector3>();
+  for (const [leafId, init] of liveOffsetInitial) {
+    const u = liveOffsetUniforms.get(init.param);
+    offsets.set(leafId, (u?.value ?? new Vector3()).clone());
+  }
+  patched = patchLiveOffsets(patched, offsets);
   const b = boundsOf(patched);
   applyProxyBounds(mesh, uBoundsMin, uBoundsMax, b.min, b.max, pad);
 }
@@ -996,6 +1108,38 @@ function patchLiveSpheres(
       return _e;
     }
   }
+}
+
+function patchLiveOffsets(
+  node: FieldNode,
+  offsets: ReadonlyMap<string, Vector3>,
+): FieldNode {
+  const walk = (n: FieldNode): FieldNode => {
+    let next: FieldNode = n;
+    switch (n.op) {
+      case "union":
+      case "intersection":
+      case "difference":
+      case "smoothUnion":
+        next = { ...n, a: walk(n.a), b: walk(n.b) };
+        break;
+      case "translate":
+      case "offset":
+        next = { ...n, solid: walk(n.solid) };
+        break;
+      default:
+        next = n;
+    }
+    const leafId = "leafId" in next ? next.leafId : undefined;
+    const off = leafId ? offsets.get(leafId) : undefined;
+    if (!off || (off.x === 0 && off.y === 0 && off.z === 0)) return next;
+    return {
+      op: "translate",
+      offset: [off.x, off.y, off.z],
+      solid: next,
+    };
+  };
+  return walk(node);
 }
 
 function createFieldHighlight(

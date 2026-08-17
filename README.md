@@ -19,7 +19,7 @@ npm install
 npm run dev
 ```
 
-Open the printed local URL (app base is `/three-cad/`, same as production). Orbit / pan / zoom the demo solid (100 mm cube ∪ 100 mm-diameter sphere). Long-press the amber sphere to grab and drag it (orbit unlocks on release). Units are **mm**; world is **Z-up**.
+Open the printed local URL (app base is `/three-cad/`, same as production). Orbit / pan / zoom the demo solid (100 mm cube ∪ 100 mm-diameter sphere). Long-press the amber sphere or the cyan cube to grab and drag it (orbit unlocks on release). Units are **mm**; world is **Z-up**.
 
 **Requires WebGPU** (Chrome, Edge, Firefox, or Safari 26+). There is no WebGL display fallback.
 

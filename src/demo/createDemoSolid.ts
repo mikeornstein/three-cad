@@ -13,6 +13,7 @@
 
 import { Mesh, type Texture } from "three";
 import {
+  DEMO_CUBE_CENTER_MM,
   DEMO_SPHERE_CENTER_MM,
   DEMO_SPHERE_RADIUS_MM,
   demoFieldNode,
@@ -40,8 +41,8 @@ export interface CreateDemoSolidOptions {
   readonly envIntensity?: number;
   readonly look?: SceneLook;
   /**
-   * When true (default), demo-sphere center/radius are live uniforms so the
-   * viewport can drive real-time smoothUnion (grab-drag).
+   * When true (default), demo-sphere center/radius and cut-cube offset
+   * are live uniforms so the viewport can grab-drag either body.
    */
   readonly liveSphere?: boolean;
 }
@@ -70,6 +71,14 @@ export function createDemoSolid(options: CreateDemoSolidOptions = {}): Mesh {
             leafId: "demo-sphere",
             center: DEMO_SPHERE_CENTER_MM,
             radius: DEMO_SPHERE_RADIUS_MM,
+          },
+        ]
+      : undefined,
+    liveTranslates: liveSphere
+      ? [
+          {
+            leafId: "cut-cube",
+            restCenter: DEMO_CUBE_CENTER_MM,
           },
         ]
       : undefined,

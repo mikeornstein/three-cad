@@ -1,9 +1,21 @@
 import "./styles.css";
+import { Vector3 } from "three";
 import { demoPartDef } from "./document/demoDocument";
 import { createDemoSolid } from "./demo/createDemoSolid";
-import { SphereGrab } from "./demo/sphereGrab";
+import {
+  SphereGrab,
+  hitPadMm,
+  isCoarseViewport,
+  type GrabBody,
+} from "./demo/sphereGrab";
+import {
+  DEMO_CUBE_MAX_MM,
+  DEMO_CUBE_MIN_MM,
+} from "./document/demoDocument";
 import type { LiveSphereHandle } from "./render/createFieldRayMarchMesh";
+import type { LiveTranslateHandle } from "./render/createFieldRayMarchMesh";
 import type { FieldHighlight } from "./render/fieldHighlight";
+import { LiveBoxPicker, LiveSpherePicker } from "./viewport/pickBody";
 import { DEFAULT_LIBRARY_ENTRY } from "./render/library";
 import { withMobileCaps } from "./render/looks";
 import { loadStudioEnvironment } from "./render/studioEnv";
@@ -138,15 +150,37 @@ async function main(): Promise<void> {
     }
 
     const liveSphere = solid.userData.liveSphere as LiveSphereHandle | undefined;
+    const liveCube = solid.userData.liveTranslate as
+      | LiveTranslateHandle
+      | undefined;
     const highlight = solid.userData.fieldHighlight as
       | FieldHighlight
       | undefined;
-    if (liveSphere && highlight) {
+    if (highlight && (liveSphere || liveCube)) {
+      const pad = () => hitPadMm(isCoarseViewport());
+      const bodies: GrabBody[] = [];
+      if (liveSphere) {
+        bodies.push({
+          handle: liveSphere,
+          picker: new LiveSpherePicker(liveSphere, pad),
+        });
+      }
+      if (liveCube) {
+        bodies.push({
+          handle: liveCube,
+          picker: new LiveBoxPicker(
+            liveCube,
+            new Vector3(...DEMO_CUBE_MIN_MM),
+            new Vector3(...DEMO_CUBE_MAX_MM),
+            pad,
+          ),
+        });
+      }
       new SphereGrab({
         viewport,
-        liveSphere,
         highlight,
         canvas,
+        bodies,
         log: (msg) => screenConsole?.log(msg),
       });
     }

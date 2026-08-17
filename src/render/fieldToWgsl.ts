@@ -32,6 +32,11 @@ export interface FieldWgslCompileOptions {
    * When set, that sphere's radius is not baked.
    */
   readonly liveSphereRadii?: Readonly<Record<string, string>>;
+  /**
+   * leafId → WGSL parameter name for a live rigid offset (`vec3<f32>`).
+   * Applied to that node and its subtree (e.g. cut-cube + drills).
+   */
+  readonly liveOffsets?: Readonly<Record<string, string>>;
 }
 
 /** Extra sampleField parameter (after `p`) for live / animated leaves. */
@@ -39,7 +44,7 @@ export interface LiveFieldParam {
   readonly name: string;
   readonly wgslType: "vec3<f32>" | "f32";
   readonly leafId: string;
-  readonly role: "sphereCenter" | "sphereRadius";
+  readonly role: "sphereCenter" | "sphereRadius" | "offset";
 }
 
 export interface FieldWgslCompileResult {
@@ -111,7 +116,8 @@ export function fieldNodeToWgsl(
   const leafW = options.leafMaterialWeight ?? {};
   const liveCenters = options.liveSphereCenters ?? {};
   const liveRadii = options.liveSphereRadii ?? {};
-  const liveParams = collectLiveParams(liveCenters, liveRadii);
+  const liveOffsets = options.liveOffsets ?? {};
+  const liveParams = collectLiveParams(liveCenters, liveRadii, liveOffsets);
   const liveDeclSuffix = liveParams
     .map((p) => `, ${p.name}: ${p.wgslType}`)
     .join("");
@@ -149,6 +155,15 @@ export function fieldNodeToWgsl(
     const w = `w${id}`;
     const h = `hl${id}`;
 
+    const liveOff =
+      "leafId" in node && node.leafId ? liveOffsets[node.leafId] : undefined;
+    let p = pointExpr;
+    if (liveOff) {
+      const lp = `p_${id}`;
+      lines.push(`let ${lp} = (${pointExpr}) - ${liveOff};`);
+      p = lp;
+    }
+
     switch (node.op) {
       case "box": {
         const min = orderedMin(node.min, node.max);
@@ -160,7 +175,7 @@ export function fieldNodeToWgsl(
         const hy = (max[1] - min[1]) * 0.5;
         const hz = (max[2] - min[2]) * 0.5;
         lines.push(
-          `let ${d} = sdBox((${pointExpr}) - vec3<f32>(${f(cx)}, ${f(cy)}, ${f(cz)}), vec3<f32>(${f(hx)}, ${f(hy)}, ${f(hz)}));`,
+          `let ${d} = sdBox((${p}) - vec3<f32>(${f(cx)}, ${f(cy)}, ${f(cz)}), vec3<f32>(${f(hx)}, ${f(hy)}, ${f(hz)}));`,
         );
         lines.push(`let ${w} = ${f(weightOf(node.leafId))};`);
         lines.push(`let ${h} = ${hlExpr(node.leafId)};`);
@@ -170,7 +185,7 @@ export function fieldNodeToWgsl(
         const centerExpr = liveCenterExpr(node.leafId, node.center, liveCenters);
         const radiusExpr = liveRadiusExpr(node.leafId, node.radius, liveRadii);
         lines.push(
-          `let ${d} = sdSphere((${pointExpr}) - ${centerExpr}, ${radiusExpr});`,
+          `let ${d} = sdSphere((${p}) - ${centerExpr}, ${radiusExpr});`,
         );
         lines.push(`let ${w} = ${f(weightOf(node.leafId))};`);
         lines.push(`let ${h} = ${hlExpr(node.leafId)};`);
@@ -187,13 +202,13 @@ export function fieldNodeToWgsl(
         let localExpr: string;
         if (axis === "x") {
           // centerXy = (cy, cz); local = (y-cy, z-cz, x-mid)
-          localExpr = `vec3<f32>((${pointExpr}).y - ${f(c0)}, (${pointExpr}).z - ${f(c1)}, (${pointExpr}).x - ${f(mid)})`;
+          localExpr = `vec3<f32>((${p}).y - ${f(c0)}, (${p}).z - ${f(c1)}, (${p}).x - ${f(mid)})`;
         } else if (axis === "y") {
           // centerXy = (cx, cz); local = (x-cx, z-cz, y-mid)
-          localExpr = `vec3<f32>((${pointExpr}).x - ${f(c0)}, (${pointExpr}).z - ${f(c1)}, (${pointExpr}).y - ${f(mid)})`;
+          localExpr = `vec3<f32>((${p}).x - ${f(c0)}, (${p}).z - ${f(c1)}, (${p}).y - ${f(mid)})`;
         } else {
           // centerXy = (cx, cy); local = (x-cx, y-cy, z-mid)
-          localExpr = `vec3<f32>((${pointExpr}).x - ${f(c0)}, (${pointExpr}).y - ${f(c1)}, (${pointExpr}).z - ${f(mid)})`;
+          localExpr = `vec3<f32>((${p}).x - ${f(c0)}, (${p}).y - ${f(c1)}, (${p}).z - ${f(mid)})`;
         }
         lines.push(
           `let ${d} = sdCylinderZ(${localExpr}, ${f(node.radius)}, ${f(halfLen)});`,
@@ -203,8 +218,8 @@ export function fieldNodeToWgsl(
         return { d, w, h };
       }
       case "union": {
-        const a = emit(node.a, pointExpr);
-        const b = emit(node.b, pointExpr);
+        const a = emit(node.a, p);
+        const b = emit(node.b, p);
         lines.push(`let ${d} = min(${a.d}, ${b.d});`);
         lines.push(
           `let ${w} = select(${b.w}, ${a.w}, ${a.d} <= ${b.d});`,
@@ -213,8 +228,8 @@ export function fieldNodeToWgsl(
         return { d, w, h };
       }
       case "intersection": {
-        const a = emit(node.a, pointExpr);
-        const b = emit(node.b, pointExpr);
+        const a = emit(node.a, p);
+        const b = emit(node.b, p);
         lines.push(`let ${d} = max(${a.d}, ${b.d});`);
         lines.push(
           `let ${w} = select(${b.w}, ${a.w}, ${a.d} >= ${b.d});`,
@@ -223,8 +238,8 @@ export function fieldNodeToWgsl(
         return { d, w, h };
       }
       case "difference": {
-        const a = emit(node.a, pointExpr);
-        const b = emit(node.b, pointExpr);
+        const a = emit(node.a, p);
+        const b = emit(node.b, p);
         lines.push(`let ${d} = max(${a.d}, -${b.d});`);
         lines.push(`let ${w} = ${a.w};`);
         finishH(a.h, node.leafId, h);
@@ -234,7 +249,7 @@ export function fieldNodeToWgsl(
         const [tx, ty, tz] = node.offset;
         const local = `p_${id}`;
         lines.push(
-          `let ${local} = (${pointExpr}) - vec3<f32>(${f(tx)}, ${f(ty)}, ${f(tz)});`,
+          `let ${local} = (${p}) - vec3<f32>(${f(tx)}, ${f(ty)}, ${f(tz)});`,
         );
         const child = emit(node.solid, local);
         lines.push(`let ${d} = ${child.d};`);
@@ -243,7 +258,7 @@ export function fieldNodeToWgsl(
         return { d, w, h };
       }
       case "offset": {
-        const inner = emit(node.solid, pointExpr);
+        const inner = emit(node.solid, p);
         lines.push(`let ${d} = ${inner.d} - ${f(node.delta)};`);
         lines.push(`let ${w} = ${inner.w};`);
         finishH(inner.h, node.leafId, h);
@@ -251,8 +266,8 @@ export function fieldNodeToWgsl(
       }
       case "smoothUnion": {
         // Soft-min: distance, material, and highlight share the same h.
-        const a = emit(node.a, pointExpr);
-        const b = emit(node.b, pointExpr);
+        const a = emit(node.a, p);
+        const b = emit(node.b, p);
         const k = Math.max(node.k, 1e-6);
         const blend = `h${id}`;
         lines.push(
@@ -338,10 +353,12 @@ export function collectFieldLeafIds(node: FieldNode): string[] {
 function collectLiveParams(
   centers: Readonly<Record<string, string>>,
   radii: Readonly<Record<string, string>>,
+  offsets: Readonly<Record<string, string>> = {},
 ): LiveFieldParam[] {
   const leafIds = new Set([
     ...Object.keys(centers),
     ...Object.keys(radii),
+    ...Object.keys(offsets),
   ]);
   const sorted = [...leafIds].sort();
   const params: LiveFieldParam[] = [];
@@ -368,6 +385,17 @@ function collectLiveParams(
         wgslType: "f32",
         leafId,
         role: "sphereRadius",
+      });
+    }
+    const oName = offsets[leafId];
+    if (oName) {
+      assertValidParamName(oName, usedNames);
+      usedNames.add(oName);
+      params.push({
+        name: oName,
+        wgslType: "vec3<f32>",
+        leafId,
+        role: "offset",
       });
     }
   }
