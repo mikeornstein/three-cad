@@ -18,7 +18,7 @@ export const HIGHLIGHT_AMOUNT: Record<HighlightLevel, number> = {
 };
 
 /** Hover ease and long-press commit share this beat. */
-export const HIGHLIGHT_EASE_MS = 140;
+export const HIGHLIGHT_EASE_MS = 70;
 
 export interface FieldHighlight {
   /** Every named node in the compiled field, stable sorted order. */
