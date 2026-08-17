@@ -26,7 +26,8 @@ import type { LiveSphereHandle } from "../render/createFieldRayMarchMesh";
 import { LiveSpherePicker, type BodyPicker } from "../viewport/pickBody";
 import type { Viewport } from "../viewport/Viewport";
 
-export const HOLD_MS = 350;
+/** Same beat as the hover ease — grab commits as the wake finishes. */
+export const HOLD_MS = HIGHLIGHT_EASE_MS;
 export const SLOP_PX = 8;
 const POP_MS = 220;
 /** Soft workspace half-extent past rest center (mm). */

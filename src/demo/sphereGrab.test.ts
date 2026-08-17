@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { Ray, Vector3 } from "three";
+import { HIGHLIGHT_EASE_MS } from "../render/fieldHighlight";
 import {
   grabCenterFromHit,
   hitPadMm,
+  HOLD_MS,
   rayHitsSphere,
   reduceGrabPhase,
   SLOP_PX,
@@ -107,5 +109,11 @@ describe("hitPadMm", () => {
   it("is larger for coarse / touch pointers", () => {
     assert.equal(hitPadMm(false), 2);
     assert.equal(hitPadMm(true), 8);
+  });
+});
+
+describe("HOLD_MS", () => {
+  it("matches the highlight ease so grab commits as the wake finishes", () => {
+    assert.equal(HOLD_MS, HIGHLIGHT_EASE_MS);
   });
 });

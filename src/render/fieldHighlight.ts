@@ -13,10 +13,11 @@ export type HighlightLevel = "rest" | "aware" | "engaged";
 /** Wake strength written to the shader for each interaction level. */
 export const HIGHLIGHT_AMOUNT: Record<HighlightLevel, number> = {
   rest: 0,
-  aware: 0.72,
+  aware: 1,
   engaged: 1,
 };
 
+/** Hover ease and long-press commit share this beat. */
 export const HIGHLIGHT_EASE_MS = 140;
 
 export interface FieldHighlight {
@@ -61,6 +62,8 @@ export function easeToward(
   durationMs: number,
 ): number {
   if (durationMs <= 0) return target;
-  const next = current + (target - current) * Math.min(1, dtMs / durationMs);
-  return Math.abs(next - target) < 0.002 ? target : next;
+  const delta = target - current;
+  const maxStep = dtMs / durationMs;
+  if (Math.abs(delta) <= maxStep || Math.abs(delta) < 0.002) return target;
+  return current + Math.sign(delta) * maxStep;
 }

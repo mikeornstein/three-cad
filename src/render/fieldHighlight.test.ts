@@ -77,6 +77,10 @@ describe("easeToward", () => {
     assert.equal(easeToward(0, 1, 140, 140), 1);
   });
 
+  it("moves linearly so hold and wake share a beat", () => {
+    assert.ok(Math.abs(easeToward(0, 1, 70, 140) - 0.5) < 1e-9);
+  });
+
   it("snaps when close", () => {
     assert.equal(easeToward(0.999, 1, 1, 140), 1);
   });
@@ -86,7 +90,7 @@ describe("HIGHLIGHT_AMOUNT", () => {
   it("is a 0..1 wake, not a material slot poke", () => {
     assert.equal(HIGHLIGHT_AMOUNT.rest, 0);
     assert.ok(HIGHLIGHT_AMOUNT.aware > HIGHLIGHT_AMOUNT.rest);
-    assert.ok(HIGHLIGHT_AMOUNT.engaged > HIGHLIGHT_AMOUNT.aware);
+    assert.ok(HIGHLIGHT_AMOUNT.engaged >= HIGHLIGHT_AMOUNT.aware);
     assert.ok(HIGHLIGHT_AMOUNT.engaged <= 1);
   });
 });

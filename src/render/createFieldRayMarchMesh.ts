@@ -560,8 +560,8 @@ fn shadeField(
   let roughness = mix(m0Rough, m1Rough, mw);
   let metalness = mix(m0Metal, m1Metal, mw);
   let transmission = mix(m0Trans, m1Trans, mw);
-  let rimBoost = mix(m0Rim, m1Rim, mw) * mix(1.0, 2.3, wake);
-  let specBoost = mix(m0Spec, m1Spec, mw) * mix(1.0, 1.5, wake);
+  let rimBoost = mix(m0Rim, m1Rim, mw) * mix(1.0, 4.2, wake);
+  let specBoost = mix(m0Spec, m1Spec, mw) * mix(1.0, 2.6, wake);
 
   let v = -rd;
   let nDotV = max(dot(n, v), 0.0);
@@ -602,7 +602,7 @@ fn shadeField(
   if (metalness > 0.7 && transmission < 0.2) {
     let diff = baseColor * (ambient + envDiff * 0.8 + keyColor * ndlKey * 0.35);
     let lit = mix(diff, baseColor * envSpec * 1.2, metalness);
-    let metalWake = baseColor * fresnelRim * wake * 0.35;
+    let metalWake = baseColor * fresnelRim * wake * 0.7;
     return vec4<f32>(tonemap(lit + F * envSpec * specBoost + metalWake), 1.0);
   }
 
@@ -702,12 +702,13 @@ fn shadeField(
   let specAtten = mix(0.45, 1.0, fresnelRim * 0.4 + 0.4);
   // Material-agnostic wake: lift existing rim/spec and add a base-tinted
   // Fresnel so metal / opaque leaves read as well as glass.
-  let wakeRim = baseColor * fresnelRim * wake * 0.22;
-  let emit = specular * specAtten + glass + rim + rimLight + wakeRim;
+  let wakeRim = baseColor * (fresnelRim * 0.55 + edgeCore * 0.35) * wake * 0.85;
+  let wakeSpec = F * envSpec * wake * 0.45;
+  let emit = specular * specAtten + glass + rim + rimLight + wakeRim + wakeSpec;
 
   let Tavg = (T.x + T.y + T.z) * (1.0 / 3.0);
   let alpha = clamp(1.0 - Tavg * transmission * 0.8, 0.12, 0.88);
-  let src = min(emit / max(alpha, 0.25), vec3<f32>(1.7));
+  let src = min(emit / max(alpha, 0.25), vec3<f32>(2.2));
   return vec4<f32>(tonemap(src), alpha);
 }
 `,
